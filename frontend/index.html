@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>曲轴工序拆分系统 v2.0</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>曲轴工序拆分系统</h1>
+            <p>图纸解析 · 工序生成 · 人工校核 · 案例归档</p>
+        </div>
+
+        <div class="tabs">
+            <div class="tab active" data-tab="generate" onclick="switchTab('generate', this)">生成工序</div>
+            <div class="tab" data-tab="edit" onclick="switchTab('edit', this)">编辑工序</div>
+            <div class="tab" data-tab="cases" onclick="switchTab('cases', this)">案例库</div>
+            <div class="tab" data-tab="settings" onclick="switchTab('settings', this)">配置</div>
+        </div>
+
+        <div class="tab-content active" id="generate-tab">
+            <div class="section-group">
+                <div class="section-card">
+                    <h3>输入方式</h3>
+                    <select id="input-method" onchange="toggleInputMethod()">
+                        <option value="text">文本输入</option>
+                        <option value="file">文件上传</option>
+                        <option value="json">JSON解析结果</option>
+                    </select>
+                </div>
+
+                <div class="section-card" id="text-input-section">
+                    <h3>输入图纸信息</h3>
+                    <textarea id="text-input" placeholder="请输入图纸信息..."></textarea>
+                </div>
+
+                <div class="section-card" id="file-input-section" style="display:none;">
+                    <h3>上传图纸文件</h3>
+                    <p style="color:#666; margin-bottom:10px;">支持批量上传 PDF、图片、DWG/DXF；多份文件会按选择顺序作为分步流程图合并分析。</p>
+                    <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.dwg,.dxf" multiple>
+                    <div id="file-info" class="file-info" style="display:none;"></div>
+                    <p style="color:#999; font-size:13px; margin-top:8px;">提示：上传后系统会调用后端解析接口；如果未接入 OCR/CAD 解析，会在结果中标出需要人工确认的原因。</p>
+                </div>
+
+                <div class="section-card" id="json-input-section" style="display:none;">
+                    <h3>粘贴 JSON 解析结果</h3>
+                    <textarea id="json-input" placeholder='{"part": {...}, "features": [...]}'></textarea>
+                </div>
+
+                <div class="section-card">
+                    <h3>外部条件（可选）</h3>
+                    <div class="external-conditions">
+                        <label><input type="checkbox" id="use-external-conditions"> 使用外部条件</label>
+                        <div id="external-conditions-form" style="display:none; margin-top:10px;">
+                            <textarea id="external-conditions-input" placeholder='{"production_constraints": {...}, "order_info": {...}}'></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-card">
+                    <h3>生成选项</h3>
+                    <div class="form-row">
+                        <div class="form-col">
+                            <label>工序模式：</label>
+                            <select id="process-mode">
+                                <option value="standard_8">标准8道工序</option>
+                                <option value="detailed_10">详细10道工序</option>
+                            </select>
+                        </div>
+                        <div class="form-col">
+                            <label class="ai-enhancement-toggle"><input type="checkbox" id="use-ai-enhancement"> <span>启用 AI 增强（需配置）</span></label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-card">
+                    <button class="btn btn-primary" id="generate-process-btn" onclick="generateProcess()">生成工序方案</button>
+                    <button class="btn btn-secondary" onclick="clearForm()">清空</button>
+                </div>
+
+                <div class="loading" id="generate-loading">
+                    <div class="spinner"></div>
+                    <p>正在生成工序，请稍候...</p>
+                </div>
+
+                <div class="result" id="generate-result"></div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="edit-tab">
+            <div class="section-group">
+                <div class="section-card">
+                    <h3>工序编辑器</h3>
+                    <p>加载生成的工序后，可以在这里进行编辑</p>
+                    <div id="edit-workspace"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="cases-tab">
+            <div class="section-group">
+                <div class="section-card">
+                    <h3>历史案例</h3>
+                    <div class="cases-filter">
+                        <select id="case-status-filter">
+                            <option value="">全部状态</option>
+                            <option value="draft">草稿</option>
+                            <option value="reviewed">已审核</option>
+                            <option value="approved">已批准</option>
+                            <option value="archived">已归档</option>
+                        </select>
+                        <select id="case-quality-filter">
+                            <option value="">全部质量</option>
+                            <option value="excellent">优秀</option>
+                            <option value="good">良好</option>
+                            <option value="normal">一般</option>
+                        </select>
+                        <button class="btn btn-sm" onclick="loadCases()">查询</button>
+                    </div>
+                    <div id="cases-list"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="settings-tab">
+            <div class="section-group">
+                <div class="section-card">
+                    <h3>系统配置</h3>
+                    <div class="settings-info" id="settings-info">
+                        <p><strong>API 地址：</strong> <span id="api-base-display">加载中</span></p>
+                        <p><strong>AI 服务：</strong> <span id="ai-status">加载中</span></p>
+                        <p><strong>OCR 服务：</strong> <span id="ocr-status">加载中</span></p>
+                        <p><strong>视觉识别：</strong> <span id="vision-status">加载中</span></p>
+                        <div id="settings-detail" class="help-text">正在读取后端配置状态...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

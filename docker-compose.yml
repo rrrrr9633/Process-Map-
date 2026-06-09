@@ -1,0 +1,30 @@
+services:
+  cutr-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cutr-app
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+      PUBLIC_API_BASE: https://tianxiadiyi.xyz
+      PUBLIC_SERVER_IP: 154.201.65.69
+      ALLOWED_ORIGINS: https://tianxiadiyi.xyz,http://tianxiadiyi.xyz,https://154.201.65.69,http://154.201.65.69,http://localhost:8000,http://127.0.0.1:8000,http://localhost:8080,http://127.0.0.1:8080
+      ARCHIVE_PATH: /app/backend/archives
+      KNOWLEDGE_BASE_PATH: /app/backend/knowledge_base
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./backend/uploads:/app/backend/uploads
+      - ./backend/generated:/app/backend/generated
+      - ./backend/archives:/app/backend/archives
+      - ./backend/knowledge_base:/app/backend/knowledge_base
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

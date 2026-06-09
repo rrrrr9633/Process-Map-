@@ -1,2 +1,17 @@
 .vscode
 .cursor
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Runtime secrets
+
+# Runtime data
+
+
+# OS / editor
+.DS_Store

@@ -17,17 +17,8 @@ INDEX_V2_PATH = FRONTEND_DIR / "index_v2.html"
 
 app = FastAPI(title="曲轴工序拆分系统", version="0.2.0")
 
-# 配置 CORS，允许本地开发地址和公网部署地址访问
-allowed_origins = [
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://154.201.65.69",
-    "https://154.201.65.69",
-    "http://tianxiadiyi.xyz",
-    "https://tianxiadiyi.xyz",
-]
+# CORS：生产环境从 ALLOWED_ORIGINS 读取，默认包含 tianxiadiyi.xyz 与服务器 IP。
+allowed_origins = settings.cors_origins
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,14 +30,18 @@ app.add_middleware(
 
 app.include_router(process_router)
 app.include_router(cases_router)
+app.include_router(process_router, prefix="/api")
+app.include_router(cases_router, prefix="/api")
 
 
 @app.get("/health")
+@app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
 @app.get("/config/status")
+@app.get("/api/config/status")
 def config_status() -> dict:
     return {
         "api_base": settings.public_api_base,

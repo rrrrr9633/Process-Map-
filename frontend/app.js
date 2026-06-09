@@ -1,7 +1,7 @@
-const DEPLOYED_API_BASE = 'https://tianxiadiyi.xyz';
+const DEPLOYED_API_BASE = '/api';
 const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-    ? 'http://localhost:8000'
-    : window.location.origin || DEPLOYED_API_BASE;
+    ? 'http://localhost:8080/api'
+    : DEPLOYED_API_BASE;
 
 // 全局状态
 let currentData = null;

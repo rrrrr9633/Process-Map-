@@ -1,0 +1,17 @@
+[Unit]
+Description=cutr FastAPI backend
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/www/server/cutr/backend
+EnvironmentFile=/www/server/cutr/backend/.env
+ExecStart=/www/server/cutr/backend/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8080 --workers 1
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
