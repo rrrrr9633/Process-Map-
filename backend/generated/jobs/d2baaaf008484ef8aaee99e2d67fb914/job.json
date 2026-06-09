@@ -1,0 +1,32 @@
+{
+  "job_id": "d2baaaf008484ef8aaee99e2d67fb914",
+  "stage": "failed",
+  "status": "failed",
+  "progress": 100,
+  "message": "任务失败",
+  "files": [
+    "uploads/a2ef8f6c34dc4f068db42e6043ea917a.pdf",
+    "uploads/4530bc5617a4488bb2845cc8c713464f.pdf",
+    "uploads/25b2590690ce4cae930ca0997a937547.pdf",
+    "uploads/76fe281c440b463ca338fcc8c6f7925e.pdf",
+    "uploads/66b6610958c540749c90aa3e1445bfee.pdf",
+    "uploads/5778cd6399dd4d5fac4fc556e01ac823.pdf",
+    "uploads/4510b6bc49b0436fb6d89720a7c3d6e5.pdf",
+    "uploads/28c0dd8c170b4071acb28f47a35a45fd.pdf",
+    "uploads/93a9ad86922a42c1ab7046bf4f4d3189.pdf",
+    "uploads/c6d6f23944f94a7089d924d9dc5233db.pdf",
+    "uploads/042aabf164fe4b9c8833edf80f822e04.pdf",
+    "uploads/1d9a5c9f0130482eb6c2ab4f3805df75.pdf",
+    "uploads/e7f6343b55614bfebb966fcac4b61fe4.pdf",
+    "uploads/3713ee0417424d688181360b59d367df.pdf",
+    "uploads/62c658ece2d14491b4b3dafdeead21d1.pdf",
+    "uploads/4f4e559b7aa14d64bc2e95ec1a4eeb8b.pdf",
+    "uploads/af0f46af6c3447b29216901abdb272ef.pdf",
+    "uploads/dfe14bcdf25646e29cc8ac560d6e7a22.pdf"
+  ],
+  "explanations": [],
+  "process_result": null,
+  "error": "ResponseNotRead: Attempted to access streaming response content, without having called `read()`.",
+  "created_at": "2026-06-09T14:13:45.702606",
+  "updated_at": "2026-06-09T14:14:11.714207"
+}

@@ -388,6 +388,68 @@ input[type="file"]:focus {
     margin-top: 4px;
 }
 
+.drawing-explanations {
+    display: grid;
+    gap: 16px;
+}
+
+.drawing-card {
+    border: 1px solid var(--border-strong);
+    background: var(--white);
+    padding: 16px;
+    margin-bottom: 14px;
+}
+
+.drawing-card-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 10px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+.drawing-card-header span {
+    color: var(--text-muted);
+    word-break: break-all;
+}
+
+.drawing-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 14px;
+    align-items: start;
+}
+
+.drawing-preview {
+    display: block;
+    max-width: 100%;
+    max-height: 520px;
+    object-fit: contain;
+    border: 1px solid var(--border);
+    background: var(--surface-muted);
+}
+
+.annotation-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.annotation-table th,
+.annotation-table td {
+    border: 1px solid var(--border);
+    padding: 7px 8px;
+    vertical-align: top;
+}
+
+.annotation-table input,
+.annotation-table select {
+    min-width: 130px;
+    padding: 6px 8px;
+    font-size: 12px;
+}
+
 .flow-readable-hint {
     color: var(--text-muted);
     margin-bottom: 14px;

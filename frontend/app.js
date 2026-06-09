@@ -1,5 +1,7 @@
-// API配置
-const API_BASE = 'http://localhost:8000';
+const DEPLOYED_API_BASE = 'https://tianxiadiyi.xyz';
+const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? 'http://localhost:8000'
+    : window.location.origin || DEPLOYED_API_BASE;
 
 // 全局状态
 let currentData = null;
@@ -89,9 +91,9 @@ function getFileSuffix(fileName) {
 }
 
 function getUploadSupportNote(suffix) {
-    if (suffix === 'pdf') return '后端提取 PDF 文本后生成工序';
-    if (['png', 'jpg', 'jpeg', 'webp', 'bmp'].includes(suffix)) return '图片会上传到后端，当前未接入 OCR，结果需要人工确认';
-    if (['dwg', 'dxf'].includes(suffix)) return '矢量图纸会上传到后端，当前仅预留 CAD 解析入口';
+    if (suffix === 'pdf') return 'PDF 将逐页渲染、OCR 辅助识别并生成图解与工序';
+    if (['png', 'jpg', 'jpeg', 'webp', 'bmp'].includes(suffix)) return '图片将 OCR 提取文字并参与逐页图解';
+    if (['dwg', 'dxf'].includes(suffix)) return 'CAD 将尝试渲染预览并提取文本（DWG 需本机 ODA）';
     return '该格式后端可能不支持';
 }
 
@@ -175,11 +177,11 @@ function renderGenerationProgress(stage, detail, startedAt, extraItems = [], act
     const items = [
         { key: 'request', label: '前端请求', value: '已准备生成参数并发起请求' },
         { key: 'upload', label: '文件上传', value: '正在把图纸文件发送到后端' },
-        { key: 'backend', label: '后端预处理', value: '复用或保存文件，快速生成本地兜底数据' },
-        { key: 'ai-prepare', label: 'AI 准备请求', value: '整理图纸图像、兜底方案和模型参数' },
+        { key: 'backend', label: '后端预处理', value: '复用或保存文件，准备图纸渲染和 AI 识别输入' },
+        { key: 'ai-prepare', label: 'AI 准备请求', value: '整理图纸图像、参考流程和模型参数' },
         { key: 'ai-connect', label: 'AI 连接模型', value: '请求已发出，等待模型建立响应或首段内容' },
         { key: 'ai-generate', label: 'AI 生成内容', value: '模型正在生成结构化工序、流程图和确认项' },
-        { key: 'ai-timeout', label: 'AI 超时边界', value: '等待模型返回；失败后后端会兜底' },
+        { key: 'ai-timeout', label: 'AI 超时边界', value: '等待模型返回；失败后任务会明确失败' },
         { key: 'result', label: '结果返回', value: '等待工序方案、流程图、Agent 链路和人工确认项返回前端' },
         ...extraItems,
     ];
@@ -228,7 +230,7 @@ function getAiWaitStage(elapsedSeconds) {
     if (elapsedSeconds < 8) {
         return {
             stage: 'AI 准备请求',
-            detail: '后端正在整理图纸图片、工序兜底方案和模型请求参数。',
+            detail: '后端正在整理图纸图片、参考流程和模型请求参数。',
             activeKey: 'ai-prepare',
         };
     }
@@ -248,7 +250,7 @@ function getAiWaitStage(elapsedSeconds) {
     }
     return {
         stage: 'AI 等待超时边界',
-        detail: 'AI 已等待较久；如果终端没有持续 chunks，优先检查模型接口、网关或超时配置。失败后后端会回退到本地兜底结果。',
+        detail: 'AI 已等待较久；如果终端没有持续 chunks，优先检查模型接口、网关或超时配置。失败后任务会明确失败，不再回退到本地兜底结果。',
         activeKey: 'ai-timeout',
     };
 }
@@ -262,6 +264,157 @@ function startAiProgressTimer(startedAt, extraItems = []) {
     };
     render();
     generationProgressTimer = setInterval(render, 1000);
+}
+
+function getProcessJobActiveKey(job) {
+    if (!job) return 'backend';
+    if (job.status === 'completed' || job.stage === 'completed') return 'result';
+    if (job.status === 'failed' || job.stage === 'failed') return 'result';
+
+    const stage = String(job.stage || '').toLowerCase();
+    if (['queued', 'created', 'uploading', 'uploaded'].includes(stage)) return 'upload';
+    if (['rendering', 'preprocessing', 'preprocess', 'backend'].includes(stage)) return 'backend';
+    if (['preparing', 'ai_prepare', 'ai-prepare'].includes(stage)) return 'ai-prepare';
+    if (['connecting', 'ai_connect', 'ai-connect'].includes(stage)) return 'ai-connect';
+    if (['explaining', 'bubble_generating', 'flow_generating', 'generating', 'ai_generate', 'ai-generate'].includes(stage)) return 'ai-generate';
+    if (['timeout', 'ai_timeout', 'ai-timeout'].includes(stage)) return 'ai-timeout';
+    return 'backend';
+}
+
+async function pollProcessJob(jobId, startedAt, uploadInfo) {
+    while (true) {
+        const response = await fetch(`${API_BASE}/process/jobs/${jobId}`);
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`任务状态读取失败 HTTP ${response.status}: ${errorText}`);
+        }
+        const job = await response.json();
+        lastJob = job;
+        setGenerationProgress(
+            job.message || '任务处理中',
+            `阶段：${job.stage}；进度：${job.progress || 0}%；已生成图解 ${job.explanations?.length || 0} 份。`,
+            startedAt,
+            [
+                { key: 'job-id', label: '任务 ID', value: job.job_id },
+                { key: 'upload-files', label: '上传文件', value: uploadInfo.name },
+                { key: 'upload-size', label: '总大小', value: formatFileSize(uploadInfo.size) },
+            ],
+            getProcessJobActiveKey(job),
+        );
+        if (job.status === 'completed') return job;
+        if (job.status === 'failed') throw new Error(job.error || job.message || '任务失败');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+}
+
+async function uploadWithJobProgress(url, formData, startedAt, uploadInfo) {
+    const response = await requestWithUploadProgress(url, formData, startedAt, uploadInfo);
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+    const job = await response.json();
+    setGenerationProgress(
+        '任务已创建，等待后端处理',
+        `任务 ${job.job_id} 已创建，后端会逐份图解 PDF、生成气泡图并汇总流程。`,
+        startedAt,
+        [
+            { key: 'job-id', label: '任务 ID', value: job.job_id },
+            { key: 'upload-files', label: '上传文件', value: uploadInfo.name },
+        ],
+        'backend',
+    );
+    return pollProcessJob(job.job_id, startedAt, uploadInfo);
+}
+
+function assetUrl(jobId, relativePath) {
+    if (!jobId || !relativePath) return '';
+    return `${API_BASE}/process/jobs/${encodeURIComponent(jobId)}/assets/${relativePath}`;
+}
+
+function renderDrawingExplanations(job) {
+    const explanations = job?.explanations || [];
+    if (!explanations.length) return '';
+    let html = '<div class="result-section drawing-explanations">';
+    html += '<h3>图纸图解与气泡图</h3>';
+    html += `<p class="flow-readable-hint">共 ${explanations.length} 份图纸。每份图纸包含页面预览、AI 图解、识别标注和气泡图。</p>`;
+    explanations.forEach(explanation => {
+        const pageItems = (explanation.page_explanations && explanation.page_explanations.length)
+            ? explanation.page_explanations
+            : [{
+                page: explanation.page_index || 1,
+                page_asset: explanation.page_asset,
+                bubble_asset: explanation.bubble_asset,
+                visual_summary: explanation.visual_summary,
+                detected_features: explanation.detected_features,
+                related_operations: explanation.related_operations,
+                risk_notes: explanation.risk_notes,
+                annotation_result: explanation.annotation_result,
+            }];
+        const csvUrl = explanation.bubble_asset?.export_csv_url
+            ? assetUrl(job.job_id, explanation.bubble_asset.export_csv_url)
+            : (pageItems[0]?.bubble_asset?.export_csv_url ? assetUrl(job.job_id, pageItems[0].bubble_asset.export_csv_url) : '');
+        html += '<div class="drawing-card">';
+        html += `<div class="drawing-card-header"><strong>第 ${explanation.file_index} 份图纸</strong><span>${escapeHtml(explanation.file_name)}</span>`;
+        html += `<span>共 ${explanation.page_count || pageItems.length} 页</span></div>`;
+        html += `<div class="info"><strong>文件图解：</strong>${escapeHtml(explanation.visual_summary || '暂无说明')}</div>`;
+        pageItems.forEach(pageItem => {
+            const pageUrl = pageItem.page_asset ? assetUrl(job.job_id, pageItem.page_asset.image_url) : '';
+            const bubbleUrl = pageItem.bubble_asset?.image_url ? assetUrl(job.job_id, pageItem.bubble_asset.image_url) : '';
+            const annotations = pageItem.annotation_result?.annotations || [];
+            html += `<div class="drawing-page-block"><h4>第 ${pageItem.page} 页</h4>`;
+            html += '<div class="drawing-card-grid">';
+            html += '<div><h5>原图预览</h5>';
+            html += pageUrl ? `<img class="drawing-preview" src="${pageUrl}" alt="第${pageItem.page}页">` : '<div class="warning">暂无页面预览</div>';
+            html += '</div><div><h5>气泡图</h5>';
+            html += bubbleUrl ? `<img class="drawing-preview" src="${bubbleUrl}" alt="气泡图">` : `<div class="warning">${escapeHtml(pageItem.bubble_asset?.message || '暂无气泡图')}</div>`;
+            html += '</div></div>';
+            html += `<div class="info"><strong>页图解：</strong>${escapeHtml(pageItem.visual_summary || '暂无说明')}</div>`;
+            if (pageItem.view_explanations?.length > 1) {
+                html += '<div class="view-explanations"><h5>分视图图解</h5><ul>';
+                pageItem.view_explanations.forEach(view => {
+                    html += `<li><strong>${escapeHtml(view.label || ('视图' + view.view_index))}：</strong>${escapeHtml(view.visual_summary || '')}`;
+                    if (view.detected_features?.length) {
+                        html += ` <span class="muted">特征：${view.detected_features.map(escapeHtml).join('、')}</span>`;
+                    }
+                    html += '</li>';
+                });
+                html += '</ul></div>';
+            }
+        if (pageItem.detected_features?.length) {
+            html += `<p><strong>识别特征：</strong>${pageItem.detected_features.map(escapeHtml).join('、')}</p>`;
+        }
+        if (pageItem.related_operations?.length) {
+            html += `<p><strong>关联工序：</strong>${pageItem.related_operations.map(escapeHtml).join('、')}</p>`;
+        }
+        if (pageItem.risk_notes?.length) {
+            html += '<div class="warning"><strong>风险提示：</strong>' + pageItem.risk_notes.map(escapeHtml).join('；') + '</div>';
+        }
+        if (annotations.length) {
+            html += '<h5>标注校正</h5>';
+            html += '<div style="overflow-x:auto;"><table class="annotation-table"><thead><tr><th>编号</th><th>原文</th><th>参数</th><th>值</th><th>区域(x,y,w,h)</th><th>状态</th><th>操作</th></tr></thead><tbody>';
+            annotations.forEach(annotation => {
+                html += '<tr>';
+                html += `<td>${escapeHtml(annotation.annotation_id || '')}</td>`;
+                html += `<td>${escapeHtml(annotation.raw_text || '')}</td>`;
+                html += `<td><input data-field="parameter_name" data-id="${escapeHtml(annotation.annotation_id)}" value="${escapeHtml(annotation.parameter_name || annotation.normalized_text || '')}"></td>`;
+                html += `<td><input data-field="parameter_value" data-id="${escapeHtml(annotation.annotation_id)}" value="${escapeHtml(annotation.parameter_value || '')}"></td>`;
+                const region = annotation.region || { x: 0, y: 0, width: 0, height: 0, unit: 'ratio' };
+                html += `<td class="region-inputs"><input data-field="region.x" data-id="${escapeHtml(annotation.annotation_id)}" value="${escapeHtml(String(region.x ?? 0))}" size="4"><input data-field="region.y" data-id="${escapeHtml(annotation.annotation_id)}" value="${escapeHtml(String(region.y ?? 0))}" size="4"><input data-field="region.width" data-id="${escapeHtml(annotation.annotation_id)}" value="${escapeHtml(String(region.width ?? 0))}" size="4"><input data-field="region.height" data-id="${escapeHtml(annotation.annotation_id)}" value="${escapeHtml(String(region.height ?? 0))}" size="4"></td>`;
+                html += `<td><select data-field="review_status" data-id="${escapeHtml(annotation.annotation_id)}"><option value="pending" ${annotation.review_status === 'pending' ? 'selected' : ''}>pending</option><option value="accepted" ${annotation.review_status === 'accepted' ? 'selected' : ''}>accepted</option><option value="needs_manual_review" ${annotation.review_status === 'needs_manual_review' ? 'selected' : ''}>needs_manual_review</option><option value="rejected" ${annotation.review_status === 'rejected' ? 'selected' : ''}>rejected</option></select></td>`;
+                html += `<td><button class="btn btn-sm" onclick="saveAnnotationEdit('${job.job_id}', '${escapeHtml(annotation.annotation_id)}')">保存</button></td>`;
+                html += '</tr>';
+            });
+            html += '</tbody></table></div>';
+        }
+        html += '</div>';
+        });
+        if (csvUrl) html += `<p><a class="btn btn-sm" href="${csvUrl}" target="_blank">下载标注 CSV</a></p>`;
+        html += '</div>';
+    });
+    html += `<button class="btn btn-secondary" onclick="regenerateBubbles('${job.job_id}')">重新生成气泡图</button>`;
+    html += '</div>';
+    return html;
 }
 
 function requestWithUploadProgress(url, formData, startedAt, uploadInfo) {
@@ -407,19 +560,19 @@ async function generateProcess() {
             }
 
             const formData = new FormData();
-            files.forEach(file => formData.append(files.length > 1 ? 'files' : 'file', file));
+            files.forEach(file => formData.append('files', file));
             uploadInfo = {
                 name: files.map(file => file.name).join('、'),
                 size: files.reduce((total, file) => total + file.size, 0),
                 suffix: files.length > 1 ? 'batch' : getFileSuffix(files[0].name),
                 supportNote: files.length > 1
-                    ? `批量上传 ${files.length} 个文件，按选择顺序作为分步流程图合并分析`
+                    ? `批量上传 ${files.length} 个文件：先逐份逐页图解，再合并生成工艺流程`
                     : getUploadSupportNote(getFileSuffix(files[0].name))
             };
-            const endpoint = files.length > 1 ? '/process/upload-batch' : '/process/upload';
+            const endpoint = '/process/jobs/upload-batch';
             startGenerationProgressTimer(
-                '后端接口已调用',
-                `正在发送 ${files.length} 个文件到 ${endpoint}。上传完成后会复用或保存文件，并进入 AI 分析等待模型返回。`,
+                '后端任务接口已调用',
+                `正在发送 ${files.length} 个文件到 ${endpoint}。上传完成后会创建任务，逐份生成图解、气泡图和汇总流程。`,
                 startedAt,
                 [
                     { label: '上传文件', value: files.map(file => file.name).join('、') },
@@ -427,12 +580,28 @@ async function generateProcess() {
                 ],
                 'upload',
             );
-            response = await requestWithUploadProgress(
-                `${API_BASE}${endpoint}?mode=${mode}&use_ai_enhancement=${useAI}`,
+            const job = await uploadWithJobProgress(
+                `${API_BASE}${endpoint}?mode=${mode}`,
                 formData,
                 startedAt,
                 uploadInfo,
             );
+            const data = job.process_result;
+            if (!data) {
+                throw new Error('任务已完成但没有返回流程结果');
+            }
+            data.upload_info = uploadInfo;
+            data.process_job = job;
+            currentData = data;
+            setGenerationProgress(
+                '生成完成，正在渲染结果',
+                `后端返回 ${data.process_plan?.operations?.length || 0} 道工序；图解 ${job.explanations?.length || 0} 份。`,
+                startedAt,
+                [],
+                'result',
+            );
+            displayResult(data);
+            response = null;
         } else if (method === 'json') {
             const jsonText = document.getElementById('json-input').value.trim();
             if (!jsonText) {
@@ -461,31 +630,33 @@ async function generateProcess() {
             });
         }
         
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`HTTP ${response.status}: ${errorText}`);
+        if (response) {
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
+            
+            setGenerationProgress(
+                '后端已响应，正在读取结果',
+                '接口已经返回，前端正在解析工序方案、Agent 链路、流程图和人工确认项。',
+                startedAt,
+                [],
+                'result',
+            );
+            const data = await response.json();
+            if (uploadInfo) {
+                data.upload_info = uploadInfo;
+            }
+            currentData = data;
+            setGenerationProgress(
+                '生成完成，正在渲染结果',
+                `后端返回 ${data.process_plan?.operations?.length || 0} 道工序；AI：${data.agent_trace?.used_ai ? '已使用' : '未使用/已兜底'}。`,
+                startedAt,
+                [],
+                'result',
+            );
+            displayResult(data);
         }
-        
-        setGenerationProgress(
-            '后端已响应，正在读取结果',
-            '接口已经返回，前端正在解析工序方案、Agent 链路、流程图和人工确认项。',
-            startedAt,
-            [],
-            'result',
-        );
-        const data = await response.json();
-        if (uploadInfo) {
-            data.upload_info = uploadInfo;
-        }
-        currentData = data;
-        setGenerationProgress(
-            '生成完成，正在渲染结果',
-            `后端返回 ${data.process_plan?.operations?.length || 0} 道工序；AI：${data.agent_trace?.used_ai ? '已使用' : '未使用/已兜底'}。`,
-            startedAt,
-            [],
-            'result',
-        );
-        displayResult(data);
         
     } catch (error) {
         keepProgressVisible = true;
@@ -554,6 +725,10 @@ function displayResult(data) {
     const container = document.getElementById('generate-result');
     let html = '';
     
+    if (data.process_job) {
+        html += renderDrawingExplanations(data.process_job);
+    }
+
     // 相似案例推荐
     if (data.similar_cases && data.similar_cases.length > 0) {
         html += '<div class="result-section">';
@@ -609,7 +784,7 @@ function displayResult(data) {
         html += '<div class="part-info-grid">';
         html += `<p><strong>识别标注：</strong>${annotations.length} 项</p>`;
         html += `<p><strong>待审核：</strong>${annotationResult.review_required_count || 0} 项</p>`;
-        html += `<p><strong>气泡图：</strong>${annotationResult.bubble_diagram_available ? '可生成' : '待完善'}</p>`;
+        html += `<p><strong>气泡图：</strong>${annotationResult.bubble_diagram_available ? '已实现生成' : '未实现生成，仅展示识别列表'}</p>`;
         html += '</div>';
 
         if (annotations.length > 0) {
@@ -787,6 +962,69 @@ function displayResult(data) {
             });
         }
     }, 100);
+}
+
+async function saveAnnotationEdit(jobId, annotationId) {
+    if (!currentData?.process_job) return;
+    let targetAnnotation = null;
+    for (const explanation of currentData.process_job.explanations || []) {
+        for (const pageItem of explanation.page_explanations || []) {
+            targetAnnotation = (pageItem.annotation_result?.annotations || []).find(item => item.annotation_id === annotationId);
+            if (targetAnnotation) break;
+        }
+        if (!targetAnnotation) {
+            targetAnnotation = (explanation.annotation_result?.annotations || []).find(item => item.annotation_id === annotationId);
+        }
+        if (targetAnnotation) break;
+    }
+    if (!targetAnnotation) {
+        alert('未找到该标注');
+        return;
+    }
+
+    const fields = document.querySelectorAll(`[data-id="${CSS.escape(annotationId)}"]`);
+    const updated = JSON.parse(JSON.stringify(targetAnnotation));
+    fields.forEach(field => {
+        const key = field.dataset.field;
+        if (key && key.startsWith('region.')) {
+            updated.region = updated.region || { unit: 'ratio', page: 1, x: 0, y: 0, width: 0, height: 0 };
+            const part = key.split('.')[1];
+            updated.region[part] = parseFloat(field.value) || 0;
+            updated.region.unit = 'ratio';
+            return;
+        }
+        updated[key] = field.value;
+    });
+    updated.raw_text = updated.raw_text || updated.parameter_name || annotationId;
+
+    try {
+        const response = await fetch(`${API_BASE}/process/jobs/${jobId}/annotations/${encodeURIComponent(annotationId)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ annotation: updated }),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+        const job = await response.json();
+        currentData.process_job = job;
+        displayResult(currentData);
+        alert('标注已保存，气泡图与导出表已自动更新');
+    } catch (error) {
+        alert('保存标注失败：' + error.message);
+    }
+}
+
+async function regenerateBubbles(jobId) {
+    if (!currentData?.process_job) return;
+    try {
+        const response = await fetch(`${API_BASE}/process/jobs/${jobId}/bubble/regenerate`, { method: 'POST' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+        const job = await response.json();
+        currentData.process_job = job;
+        displayResult(currentData);
+        alert('气泡图已重新生成');
+    } catch (error) {
+        alert('重新生成气泡图失败：' + error.message);
+    }
 }
 
 // 编辑当前方案

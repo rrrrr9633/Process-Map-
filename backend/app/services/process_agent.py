@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -10,6 +11,8 @@ from app.config import settings
 from app.models.agent import AgentArtifact, AgentProcessResponse, AgentQuestion, AgentRunTrace
 from app.models.annotation import AnnotationExportRow, DrawingAnnotation, DrawingAnnotationResult
 from app.models.drawing import DrawingParseResult, FeatureType, RequirementType, RiskFlag
+from app.models.drawing_explanation import DrawingExplanation
+from app.services.annotation_normalizer import merge_annotation_results
 from app.models.flow import FlowEdge, ProcessFlow
 from app.models.process import Operation, ProcessMode, ProcessPlan
 from app.services.ai_service import AIServiceError, ai_service
@@ -109,33 +112,26 @@ class ProcessAgent:
         self,
         file_paths: list[str | Path],
         mode: ProcessMode = ProcessMode.STANDARD_8,
+        explanations: list[DrawingExplanation] | None = None,
     ) -> AgentProcessResponse:
         trace = AgentRunTrace(goal=f"{settings.agent_goal}，并合并多份分步图纸为工人生产指导流程")
         trace.stages.append(f"接收分步图纸 {len(file_paths)} 份")
 
         parse_results: list[DrawingParseResult] = []
         image_payloads: list[dict[str, str]] = []
+        if explanations:
+            image_payloads = self._image_payloads_from_explanations(explanations, settings.agent_max_images)
+            if image_payloads:
+                trace.stages.append(f"使用逐页图解预览图 {len(image_payloads)} 张参与流程合并")
 
         for index, file_path in enumerate(file_paths, start=1):
             path = Path(file_path)
             started_at = perf_counter()
             print(f"[process] batch local step {index}/{len(file_paths)} start: {path.name}", flush=True)
-            if path.suffix.lower() == ".pdf":
-                parse_result = DrawingParseResult(
-                    raw_text="",
-                    risk_flags=[
-                        RiskFlag(
-                            field="pdf_text",
-                            message="批量 PDF 已跳过逐份文本抽取，优先进入 AI 视觉合并分析",
-                            severity="info",
-                        )
-                    ],
-                )
-            else:
-                parse_result = self.parser.parse_file(path)
+            parse_result = self.parser.parse_file(path)
             parse_results.append(parse_result)
-            if not image_payloads:
-                image_payloads.extend(self._extract_images(path, trace)[:1])
+            if not explanations:
+                image_payloads.extend(self._extract_images(path, trace))
             elapsed_ms = int((perf_counter() - started_at) * 1000)
             print(f"[process] batch local step {index}/{len(file_paths)} done in {elapsed_ms}ms: {path.name}", flush=True)
             trace.stages.append(f"完成第 {index} 份图纸本地解析：{path.name}")
@@ -172,51 +168,36 @@ class ProcessAgent:
             )
         )
 
-        if settings.agent_enabled and ai_service.enabled:
-            try:
-                trace.stages.append("AI Agent 合并分析批量图纸")
-                print(
-                    f"[process] batch ai start: files={len(file_paths)}, images={len(image_payloads[:1])}, text_chars={len(parse_result.raw_text or '')}",
-                    flush=True,
-                )
-                ai_started_at = perf_counter()
-                payload = await ai_service.analyze_drawing_for_process_flow(
-                    goal=trace.goal,
-                    pdf_text=parse_result.raw_text or "",
-                    image_payloads=image_payloads[:1],
-                    mode=mode.value,
-                    fallback_plan=fallback_plan.model_dump(mode="json"),
-                )
-                elapsed_ms = int((perf_counter() - ai_started_at) * 1000)
-                print(f"[process] batch ai done in {elapsed_ms}ms", flush=True)
-                trace.used_ai = True
-                trace.used_vision = bool(image_payloads)
-                return self._build_agent_response(payload, fallback_plan, parse_result, trace, mode)
-            except Exception as exc:
-                print(f"[process] batch ai failed: {type(exc).__name__}: {exc}", flush=True)
-                trace.questions.append(
-                    AgentQuestion(
-                        field="ai_agent",
-                        question="AI Agent 批量合并分析失败，已使用本地规则结果避免继续卡住。",
-                        reason=f"{type(exc).__name__}: {exc}",
-                        severity="warning",
-                    )
-                )
+        if not settings.agent_enabled:
+            raise AIServiceError("AI Agent 未启用，批量图纸无法生成真实合并流程")
+        if not ai_service.enabled:
+            raise AIServiceError("AI Agent 未配置密钥，批量图纸无法生成真实合并流程")
 
-        trace.fallback_used = True
-        fallback_plan.requires_manual_review = True
-        fallback_plan.validation_issues = self.validator.validate(parse_result, fallback_plan)
-        flow = self.flow_builder.build(fallback_plan)
-
-        return AgentProcessResponse(
-            parse_result=parse_result,
-            annotation_result=DrawingAnnotationResult(),
-            process_plan=fallback_plan,
-            flow=flow,
-            similar_cases=[],
-            ai_suggestions=["已合并批量图纸；当前使用本地快速结果，避免逐文件 AI 处理卡死"],
-            agent_trace=trace,
+        trace.stages.append("AI Agent 合并分析批量图纸")
+        print(
+            f"[process] batch ai start: files={len(file_paths)}, images={len(image_payloads)}, text_chars={len(parse_result.raw_text or '')}",
+            flush=True,
         )
+        ai_started_at = perf_counter()
+        per_file_explanations = self._agent_explanation_context(explanations) if explanations else None
+        payload = await ai_service.analyze_drawing_for_process_flow(
+            goal=trace.goal,
+            pdf_text=parse_result.raw_text or "",
+            image_payloads=image_payloads,
+            mode=mode.value,
+            fallback_plan=fallback_plan.model_dump(mode="json"),
+            per_file_explanations=per_file_explanations,
+        )
+        elapsed_ms = int((perf_counter() - ai_started_at) * 1000)
+        print(f"[process] batch ai done in {elapsed_ms}ms", flush=True)
+        trace.used_ai = True
+        trace.used_vision = bool(image_payloads)
+        response = self._build_agent_response(payload, fallback_plan, parse_result, trace, mode)
+        if explanations:
+            merged = merge_annotation_results([item.annotation_result for item in explanations])
+            if merged.annotations:
+                response = response.model_copy(update={"annotation_result": merged})
+        return response
 
     async def run_from_text(
         self,
@@ -263,7 +244,17 @@ class ProcessAgent:
         )
 
     def _extract_images(self, path: Path, trace: AgentRunTrace) -> list[dict[str, str]]:
-        if path.suffix.lower() != ".pdf":
+        suffix = path.suffix.lower()
+        if suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
+            payload = self._image_file_payload(path)
+            if payload:
+                trace.stages.append("加载上传图片参与流程分析")
+                return [payload]
+            return []
+        if suffix in {".dxf", ".dwg"}:
+            rendered = self._render_cad_preview_payload(path, trace)
+            return rendered
+        if suffix != ".pdf":
             return []
         try:
             page_images = self.parser.extract_pdf_page_images(path, max_images=settings.agent_max_images)
@@ -418,7 +409,7 @@ class ProcessAgent:
         return DrawingAnnotationResult(
             annotations=safe_annotations,
             export_rows=safe_rows,
-            bubble_diagram_available=bool(safe_annotations),
+            bubble_diagram_available=False,
             review_required_count=review_required_count,
         )
 

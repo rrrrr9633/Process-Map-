@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import csv
+import json
 from pathlib import Path
 from uuid import uuid4
 
+from app.models.drawing_explanation import DrawingExplanation
 from app.models.flow import ProcessFlow
 from app.models.process import ProcessPlan
 
@@ -40,3 +43,74 @@ class ExportService:
         file_path = target_dir / f"process_plan_{uuid4().hex}.md"
         file_path.write_text(self.to_markdown(plan, flow), encoding="utf-8")
         return file_path
+
+    def export_annotations(self, explanations: list[DrawingExplanation], export_dir: str | Path) -> tuple[Path, Path]:
+        target_dir = Path(export_dir)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = target_dir / "annotations.csv"
+        json_path = target_dir / "annotations.json"
+        rows: list[dict] = []
+        for explanation in explanations:
+            page_sources = explanation.page_explanations or []
+            if page_sources:
+                for page_explanation in page_sources:
+                    for row in page_explanation.annotation_result.export_rows:
+                        rows.append(
+                            {
+                                "file_index": explanation.file_index,
+                                "file_name": explanation.file_name,
+                                "page": page_explanation.page,
+                                "row_no": row.row_no,
+                                "annotation_id": row.annotation_id,
+                                "parameter_name": row.parameter_name,
+                                "parameter_value": row.parameter_value,
+                                "upper_limit": row.upper_limit,
+                                "lower_limit": row.lower_limit,
+                                "unit": row.unit,
+                                "semantic_type": row.semantic_type,
+                                "review_status": row.review_status,
+                                "source": row.source,
+                                "confidence": row.confidence,
+                            }
+                        )
+                continue
+            for row in explanation.annotation_result.export_rows:
+                rows.append(
+                    {
+                        "file_index": explanation.file_index,
+                        "file_name": explanation.file_name,
+                        "row_no": row.row_no,
+                        "annotation_id": row.annotation_id,
+                        "parameter_name": row.parameter_name,
+                        "parameter_value": row.parameter_value,
+                        "upper_limit": row.upper_limit,
+                        "lower_limit": row.lower_limit,
+                        "unit": row.unit,
+                        "semantic_type": row.semantic_type,
+                        "review_status": row.review_status,
+                        "source": row.source,
+                        "confidence": row.confidence,
+                    }
+                )
+        fieldnames = [
+            "file_index",
+            "file_name",
+            "page",
+            "row_no",
+            "annotation_id",
+            "parameter_name",
+            "parameter_value",
+            "upper_limit",
+            "lower_limit",
+            "unit",
+            "semantic_type",
+            "review_status",
+            "source",
+            "confidence",
+        ]
+        with csv_path.open("w", newline="", encoding="utf-8-sig") as file:
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+        json_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+        return csv_path, json_path

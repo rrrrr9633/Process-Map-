@@ -26,6 +26,49 @@ class AIService:
         self.timeout_seconds = settings.ai_timeout_seconds
         self.enabled = bool(self.api_key)
 
+    def ocr_image_text(self, image_path: Path, *, prompt: str | None = None) -> str:
+        """同步调用多模态模型提取图纸文字（供 OCR 链路复用 AI_API_KEY）。"""
+        from pathlib import Path as _Path
+        import base64
+
+        path = _Path(image_path)
+        if not self.enabled or not path.is_file():
+            return ""
+        try:
+            raw = path.read_bytes()
+        except Exception:
+            return ""
+        mime = "image/png"
+        if path.suffix.lower() in {".jpg", ".jpeg"}:
+            mime = "image/jpeg"
+        b64 = base64.b64encode(raw).decode("ascii")
+        user_prompt = prompt or "只输出图纸中可见文字与尺寸标注，保持换行，不要解释。"
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": "你是 OCR 助手，只返回识别到的文字。"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}", "detail": "high"}},
+                    ],
+                },
+            ],
+            "temperature": 0,
+        }
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        try:
+            with httpx.Client(timeout=self.timeout_seconds) as client:
+                response = client.post(f"{self.api_base}/chat/completions", headers=headers, json=payload)
+            if response.status_code >= 400:
+                return ""
+            data = response.json()
+            content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content")) or ""
+            return str(content).strip()
+        except Exception:
+            return ""
+
     async def analyze_drawing_for_process_flow(
         self,
         *,
@@ -34,6 +77,7 @@ class AIService:
         image_payloads: list[dict[str, str]],
         mode: str,
         fallback_plan: dict[str, Any],
+        per_file_explanations: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if not self.enabled:
             raise AIServiceError("AI Agent 未启用：未配置 AI_API_KEY")
@@ -48,6 +92,7 @@ class AIService:
                         "pdf_text": pdf_text[: settings.agent_max_pdf_text_chars],
                         "image_count": len(image_payloads),
                         "fallback_plan": fallback_plan,
+                        "per_file_explanations": per_file_explanations or [],
                         "output_schema": self._agent_output_schema(),
                         "rules": [
                             "优先根据 PDF 图片中的真实结构、标注、技术要求拆分流程，不要套固定模板。",
@@ -57,6 +102,7 @@ class AIService:
                             "每道工序必须输出 worker_steps、materials、tools、setup_requirements、safety_points、quality_gates、handoff_requirements，保证工人能按步骤生产。",
                             "流程边 edges 必须表达实际先后关系；如有并行、返修、人工确认，也要输出对应关系。",
                             "只返回 JSON，不要返回 Markdown。",
+                            "若提供 per_file_explanations，必须结合每份图纸、每页的图解结论拆分流程，并在 drawing_basis 中引用 file_index/page。",
                         ],
                     },
                     ensure_ascii=False,
@@ -95,6 +141,79 @@ class AIService:
         parsed = self._extract_json(result)
         if not parsed:
             raise AIServiceError(f"AI Agent 返回了非结构化结果：{result.strip()}")
+        return parsed
+
+    async def explain_single_drawing_page(
+        self,
+        *,
+        file_name: str,
+        file_index: int,
+        page: int = 1,
+        page_count: int = 1,
+        image_payload: dict[str, str],
+        ocr_text: str = "",
+        view_label: str = "",
+        view_region: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
+        if not self.enabled:
+            raise AIServiceError("AI Agent 未启用：未配置 AI_API_KEY")
+
+        output_schema = {
+            "visual_summary": "这张图纸主要表达的零件、加工步骤或检验内容",
+            "detected_features": ["识别到的结构、加工对象、关键区域"],
+            "related_operations": ["建议对应的工序名称或编号"],
+            "risk_notes": ["需要人工确认的疑点"],
+            "annotation_result": self._agent_output_schema()["annotation_result"],
+        }
+        user_content: list[dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "file_name": file_name,
+                        "file_index": file_index,
+                        "page": page,
+                        "page_count": page_count,
+                        "view_label": view_label,
+                        "view_region": view_region or {},
+                        "ocr_text": ocr_text[:4000],
+                        "goal": "解释单张 PDF 图纸页面或其中一个视图，提取标注并为气泡图生成提供坐标依据",
+                        "output_schema": output_schema,
+                        "rules": [
+                            "只返回 JSON，不要返回 Markdown。",
+                            "visual_summary 必须用工人能理解的话说明这张图在表达什么。",
+                            "annotations 中 region 坐标使用 unit=ratio；若提供了 view_region 则相对当前视图裁剪图 0~1，否则相对整页 0~1；无法确定坐标时 width/height 置 0 并在 review_reason 说明。",
+                            "结合 ocr_text 校正尺寸和标注，不要与 OCR 明显冲突。",
+                            "不要编造具体尺寸、公差或材料；看不清就放入 risk_notes。",
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{image_payload['mime_type']};base64,{image_payload['base64']}",
+                    "detail": "high",
+                },
+            },
+        ]
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "你是机械图纸图解 Agent。你只分析当前这一张图纸页面，输出严格 JSON。",
+                },
+                {"role": "user", "content": user_content},
+            ],
+            "temperature": 0.1,
+            "response_format": {"type": "json_object"},
+        }
+        result = await self._chat_completion(payload)
+        parsed = self._extract_json(result)
+        if not parsed:
+            raise AIServiceError(f"AI 单图图解返回了非结构化结果：{result.strip()}")
         return parsed
 
     async def enhance_process_plan(self, process_plan: ProcessPlan, drawing_info: dict[str, Any]) -> tuple[ProcessPlan, list[str]]:
@@ -248,7 +367,7 @@ class AIService:
                         "confidence": 0.8,
                     }
                 ],
-                "bubble_diagram_available": True,
+                "bubble_diagram_available": False,
                 "review_required_count": 1,
             },
             "process_plan": {
@@ -314,20 +433,7 @@ class AIService:
                     print(f"[ai] stream retry done in {elapsed_ms}ms, chars={len(response)}", flush=True)
                     return response
 
-            non_stream_payload = dict(payload)
-            non_stream_payload["stream"] = False
-            print("[ai] non-stream request start: json_mode=true", flush=True)
-            response = await client.post(f"{self.api_base}/chat/completions", headers=headers, json=non_stream_payload)
-            if response.status_code in {400, 422} and "response_format" in non_stream_payload:
-                non_stream_payload.pop("response_format", None)
-                print(f"[ai] non-stream retry start: status={response.status_code}, json_mode=false", flush=True)
-                response = await client.post(f"{self.api_base}/chat/completions", headers=headers, json=non_stream_payload)
-            self._raise_for_ai_response(response)
-            data = response.json()
-        content = data["choices"][0]["message"]["content"]
-        elapsed_ms = int((perf_counter() - request_started_at) * 1000)
-        print(f"[ai] non-stream request done in {elapsed_ms}ms, chars={len(content)}", flush=True)
-        return content
+            raise AIServiceError("AI 流式请求没有返回内容；已停止降级为非流式长时间等待")
 
     async def _post_stream(
         self,
@@ -342,7 +448,7 @@ class AIService:
             print(f"[ai] stream connected: status={response.status_code}", flush=True)
             if response.status_code >= 400:
                 print(f"[ai] stream rejected: status={response.status_code}", flush=True)
-                return None
+                self._raise_for_ai_response(response)
             async for line in response.aiter_lines():
                 line = line.strip()
                 if not line or not line.startswith("data:"):
@@ -375,6 +481,8 @@ class AIService:
         detail = self._response_error_detail(response)
         if response.status_code == 502:
             raise AIServiceError(f"AI 服务网关暂时不可用（502），请稍后重试或检查 AI_API_BASE{detail}")
+        if response.status_code == 504:
+            raise AIServiceError(f"AI 服务网关超时（504），模型没有在网关时限内返回首段内容{detail}")
         if response.status_code >= 500:
             raise AIServiceError(f"AI 服务暂时不可用（HTTP {response.status_code}），请稍后重试{detail}")
         if response.status_code >= 400:

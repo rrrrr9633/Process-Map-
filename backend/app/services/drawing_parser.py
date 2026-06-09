@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from pathlib import Path
 
 from pypdf import PdfReader
@@ -17,6 +18,7 @@ from app.models.drawing import (
     TechnicalRequirement,
 )
 from app.rules.crankshaft_rules import REQUIREMENT_RULES
+from app.services.ocr_service import ocr_service
 
 
 FEATURE_KEYWORDS: dict[FeatureType, tuple[str, ...]] = {
@@ -40,14 +42,20 @@ class DrawingParser:
             return self.parse_pdf(path)
         if suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
             return self.parse_image(path)
-        if suffix in {".dwg", ".dxf"}:
-            return self.parse_vector_placeholder(path)
+        if suffix == ".dxf":
+            return self.parse_dxf(path)
+        if suffix == ".dwg":
+            return self.parse_dwg(path)
         return DrawingParseResult(
             risk_flags=[RiskFlag(field="file", message=f"暂不支持的文件格式：{suffix}", severity="critical")]
         )
 
     def parse_pdf(self, path: Path) -> DrawingParseResult:
         raw_text = self._extract_pdf_text(path)
+        if len(raw_text.strip()) < 100:
+            ocr_text = ocr_service.extract_text_from_pdf(path)
+            if ocr_text.strip():
+                raw_text = f"{raw_text.strip()}\n\n{ocr_text.strip()}" if raw_text.strip() else ocr_text.strip()
         result = self.parse_text(raw_text)
         result.raw_text = raw_text
         if not raw_text.strip():
@@ -57,10 +65,56 @@ class DrawingParser:
         return result
 
     def parse_image(self, path: Path) -> DrawingParseResult:
+        text = ocr_service.extract_text_from_image(path)
+        if text.strip():
+            result = self.parse_text(text)
+            result.raw_text = text
+            result.risk_flags.append(
+                RiskFlag(field="image_ocr", message="图片已通过 OCR 提取文字，仍建议人工确认关键标注", severity="info")
+            )
+            return result
         return DrawingParseResult(
             raw_text="",
             risk_flags=[
-                RiskFlag(field="image", message="图片输入已接收，当前 MVP 未接入 OCR/多模态识别，需要人工确认", severity="warning")
+                RiskFlag(field="image", message="图片输入已接收，当前 OCR 未识别到足够文字，需要人工确认", severity="warning")
+            ],
+        )
+
+    def parse_dxf(self, path: Path) -> DrawingParseResult:
+        text = self._extract_dxf_text(path)
+        if not text.strip():
+            text = self._extract_dxf_text_with_ezdxf(path)
+        if text.strip():
+            result = self.parse_text(text)
+            result.raw_text = text
+            result.risk_flags.append(
+                RiskFlag(field="dxf", message="DXF 已解析文本/标注实体，几何预览由 CAD 渲染链路生成", severity="info")
+            )
+            return result
+        return DrawingParseResult(
+            raw_text="",
+            risk_flags=[
+                RiskFlag(field="vector_drawing", message="DXF 未提取到可读文本，请检查文件或安装 ezdxf", severity="warning")
+            ],
+        )
+
+    def parse_dwg(self, path: Path) -> DrawingParseResult:
+        text = self._extract_dwg_text_with_odafc(path)
+        if text.strip():
+            result = self.parse_text(text)
+            result.raw_text = text
+            result.risk_flags.append(
+                RiskFlag(field="dwg", message="DWG 已通过 ODA 转换读取文本，几何预览依赖 CAD 渲染链路", severity="info")
+            )
+            return result
+        return DrawingParseResult(
+            raw_text="",
+            risk_flags=[
+                RiskFlag(
+                    field="vector_drawing",
+                    message="DWG 未解析到文本；安装 ODA File Converter 后可渲染并提取更多内容",
+                    severity="warning",
+                )
             ],
         )
 
@@ -94,19 +148,91 @@ class DrawingParser:
     def _extract_pdf_text(self, path: Path) -> str:
         try:
             reader = PdfReader(str(path), strict=False)
-            page_texts = [page.extract_text() or "" for page in reader.pages[:3]]
+            page_texts = [page.extract_text() or "" for page in reader.pages]
             return "\n".join(page_texts)
         except Exception:
             return ""
 
-    def extract_pdf_page_images(self, path: str | Path, max_images: int = 1, zoom: float = 1.0) -> list[dict[str, str]]:
+    def _extract_dxf_text(self, path: Path) -> str:
+        try:
+            raw = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return ""
+
+        lines = [line.rstrip("\r") for line in raw.splitlines() if line.strip()]
+        if len(lines) < 4:
+            return ""
+
+        texts: list[str] = []
+        current_entity = ""
+        pair_count = len(lines) - len(lines) % 2
+        for index in range(0, pair_count, 2):
+            code = lines[index].strip()
+            value = lines[index + 1].strip()
+            if code == "0":
+                current_entity = value.upper()
+                continue
+            if code == "1" and current_entity in {"TEXT", "MTEXT", "ATTRIB", "ATTDEF"} and value:
+                texts.append(value)
+
+        if texts:
+            unique_texts: list[str] = []
+            seen = set()
+            for item in texts:
+                normalized = item.strip()
+                if normalized and normalized not in seen:
+                    unique_texts.append(normalized)
+                    seen.add(normalized)
+            return "\n".join(unique_texts)
+
+        keyword_hits = [line.strip() for line in lines if line.strip() and any(token in line for token in ("曲轴", "公差", "粗糙度", "材料", "热处理"))]
+        return "\n".join(keyword_hits[:20])
+
+    def _extract_dxf_text_with_ezdxf(self, path: Path) -> str:
+        try:
+            import ezdxf
+        except Exception:
+            return ""
+        try:
+            document = ezdxf.readfile(str(path))
+        except Exception:
+            return ""
+        texts: list[str] = []
+        for entity in document.modelspace().query("TEXT MTEXT ATTRIB ATTDEF"):
+            value = getattr(entity.dxf, "text", "") or ""
+            if value.strip():
+                texts.append(value.strip())
+        return "\n".join(dict.fromkeys(texts))
+
+    def _extract_dwg_text_with_odafc(self, path: Path) -> str:
+        try:
+            from ezdxf.addons import odafc
+        except Exception:
+            return ""
+        if not odafc.is_installed():
+            return ""
+        try:
+            document = odafc.readfile(str(path))
+        except Exception:
+            return ""
+        texts: list[str] = []
+        for entity in document.modelspace().query("TEXT MTEXT ATTRIB ATTDEF"):
+            value = getattr(entity.dxf, "text", "") or ""
+            if value.strip():
+                texts.append(value.strip())
+        return "\n".join(dict.fromkeys(texts))
+
+    def extract_pdf_page_images(self, path: str | Path, max_images: int = 6, zoom: float = 1.5) -> list[dict[str, str]]:
         try:
             import fitz
         except Exception:
             return []
 
         images: list[dict[str, str]] = []
-        document = fitz.open(str(path))
+        try:
+            document = fitz.open(str(path))
+        except Exception:
+            return []
         try:
             matrix = fitz.Matrix(zoom, zoom)
             for page_index in range(min(len(document), max_images)):

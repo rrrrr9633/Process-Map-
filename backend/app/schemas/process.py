@@ -9,6 +9,7 @@ from app.models.annotation import DrawingAnnotationResult
 from app.models.constraints import ExternalConditions
 from app.models.drawing import DrawingParseResult
 from app.models.flow import ProcessFlow
+from app.models.drawing_explanation import DrawingExplanation
 from app.models.process import ProcessMode, ProcessPlan
 
 
@@ -41,3 +42,6 @@ class ProcessGenerationResponse(BaseModel):
     similar_cases: List[dict] = []
     ai_suggestions: List[str] = []
     agent_trace: Optional[AgentRunTrace] = None
+    job_id: Optional[str] = None
+    explanations: List[DrawingExplanation] = Field(default_factory=list)
+

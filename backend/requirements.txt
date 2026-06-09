@@ -9,3 +9,5 @@ PyMuPDF
 pytest
 python-dotenv
 httpx
+ezdxf
+matplotlib

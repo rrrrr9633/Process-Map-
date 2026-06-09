@@ -40,8 +40,3 @@ file:///C:/Users/86134/Desktop/cutr/frontend/index.html
 }
 ```
 
-## 当前边界
-
-- 图片 OCR 和多模态识图暂未接入，只保留入口和人工确认标记。
-- DWG/DXF 仅作为输入解析入口预留，不生成 CAD 文件。
-- 当前 AI 文本补全以规则模板文本为主，后续可接 DeepSeek 或其他大模型进一步润色。
