@@ -36,6 +36,48 @@ class CaseService:
         with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
             return ProcessCase(**data)
+
+    def delete_case(self, case_id: str, *, delete_source_files: bool = True) -> dict:
+        """删除案例，并按需清理该案例绑定的 uploads 文件。"""
+        case = self.load_case(case_id)
+        if not case:
+            return {"deleted": False, "deleted_files": [], "retained_files": []}
+
+        deleted_files: list[str] = []
+        retained_files: list[str] = []
+        file_path = self.storage_path / f"{case_id}.json"
+        referenced_names = {item.stored_name for item in case.source_files if item.stored_name}
+
+        if file_path.exists():
+            file_path.unlink()
+            deleted_files.append(str(file_path))
+
+        if delete_source_files and referenced_names:
+            still_referenced = self._referenced_source_file_names()
+            upload_root = Path("./uploads").resolve()
+            for stored_name in referenced_names:
+                if stored_name in still_referenced:
+                    retained_files.append(stored_name)
+                    continue
+                source_path = (upload_root / Path(stored_name).name).resolve()
+                if upload_root not in source_path.parents or not source_path.is_file():
+                    continue
+                source_path.unlink()
+                deleted_files.append(str(source_path))
+
+        return {
+            "deleted": True,
+            "deleted_files": deleted_files,
+            "retained_files": retained_files,
+        }
+
+    def _referenced_source_file_names(self) -> set[str]:
+        names: set[str] = set()
+        for case in self.list_cases(limit=10000):
+            for source_file in case.source_files:
+                if source_file.stored_name:
+                    names.add(source_file.stored_name)
+        return names
     
     def list_cases(
         self,

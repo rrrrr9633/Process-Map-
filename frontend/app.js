@@ -10,6 +10,7 @@ let isGeneratingProcess = false;
 let generationProgressTimer = null;
 let generationProgressSnapshot = {
     extraItems: [],
+    activeKey: 'request',
 };
 let lastJob = null;
 let boundCaseSourceFiles = null;
@@ -282,9 +283,65 @@ function renderGenerationProgress(stage, detail, startedAt, extraItems = [], act
     `;
 }
 
+function renderGenerationFailure(stage, detail, startedAt, extraItems = []) {
+    const elapsedSeconds = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0;
+    const items = extraItems.filter(item => item && item.key);
+    return `
+        <div class="progress-panel progress-panel-failed">
+            <div class="progress-panel-header">
+                <strong>${escapeHtml(stage)}</strong>
+                <span>已等待 ${elapsedSeconds} 秒</span>
+            </div>
+            <div class="critical"><strong>失败原因：</strong>${escapeHtml(detail)}</div>
+            <div class="progress-steps">
+                ${items.map(item => `
+                    <div class="progress-step failed" data-progress-key="${escapeHtml(item.key)}">
+                        <strong>${escapeHtml(item.label)}</strong>
+                        <span>${escapeHtml(item.value)}</span>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function showGenerationFailure(stage, detail, startedAt, extraItems = []) {
+    const loading = document.getElementById('generate-loading');
+    if (!loading) return;
+    generationProgressSnapshot = { extraItems: [], activeKey: 'failed' };
+    loading.innerHTML = renderGenerationFailure(stage, detail, startedAt, extraItems);
+    loading.classList.add('active');
+}
+
+function getProgressRank(activeKey) {
+    const ranks = {
+        request: 0,
+        upload: 1,
+        backend: 2,
+        'ai-prepare': 3,
+        'ai-connect': 4,
+        'ai-generate': 5,
+        'ai-timeout': 6,
+        failed: 7,
+        result: 8,
+    };
+    return ranks[activeKey] ?? 0;
+}
+
+function stabilizeProgressActiveKey(activeKey) {
+    const currentKey = generationProgressSnapshot.activeKey || 'request';
+    if (getProgressRank(activeKey) < getProgressRank(currentKey)) {
+        return currentKey;
+    }
+    generationProgressSnapshot.activeKey = activeKey;
+    return activeKey;
+}
+
 function updateGenerationProgressDom(stage, detail, startedAt, extraItems = [], activeKey = 'backend') {
     const loading = document.getElementById('generate-loading');
     if (!loading) return;
+
+    activeKey = stabilizeProgressActiveKey(activeKey);
 
     const incomingKeys = extraItems.map(item => item?.key).filter(Boolean).sort().join('|');
     const currentKeys = generationProgressSnapshot.extraItems.map(item => item.key).sort().join('|');
@@ -571,31 +628,34 @@ function resetGenerateButton(loading, generateButton) {
     if (generateButton) {
         generateButton.disabled = false;
         generateButton.textContent = '生成工序方案';
+        delete generateButton.dataset.generating;
     }
 }
 
 // 生成工序
 async function generateProcess() {
-    if (isGeneratingProcess) {
+    const generateButton = document.getElementById('generate-process-btn');
+    if (isGeneratingProcess || generateButton?.dataset.generating === 'true') {
         return;
     }
     isGeneratingProcess = true;
+    if (generateButton) {
+        generateButton.dataset.generating = 'true';
+    }
 
     const method = document.getElementById('input-method').value;
     const mode = document.getElementById('process-mode').value;
-    const useAI = document.getElementById('use-ai-enhancement').checked;
     const useExternalConditions = document.getElementById('use-external-conditions').checked;
     
     const loading = document.getElementById('generate-loading');
     const result = document.getElementById('generate-result');
-    const generateButton = document.getElementById('generate-process-btn');
     const startedAt = Date.now();
-    generationProgressSnapshot = { extraItems: [] };
+    generationProgressSnapshot = { extraItems: [], activeKey: 'request' };
     
     result.classList.remove('active');
     startGenerationProgressTimer(
         '准备生成工序',
-        `输入方式：${method}；工序模式：${mode}；AI增强：${useAI ? '开启' : '关闭'}`,
+        `输入方式：${method}；工序模式：${mode}`,
         startedAt,
         [],
         'request',
@@ -607,7 +667,6 @@ async function generateProcess() {
     
     let requestData = {
         mode,
-        use_ai_enhancement: useAI
     };
     
     // 外部条件
@@ -806,12 +865,11 @@ async function generateProcess() {
         if (lastJob?.job_id) {
             failureItems.unshift({ key: 'job-id', label: '任务 ID', value: lastJob.job_id });
         }
-        setGenerationProgress(
+        showGenerationFailure(
             '生成失败',
             error.message,
             startedAt,
             failureItems,
-            'failed',
         );
         alert('生成失败：' + error.message);
         console.error(error);
@@ -822,6 +880,7 @@ async function generateProcess() {
             if (generateButton) {
                 generateButton.disabled = false;
                 generateButton.textContent = '生成工序方案';
+                delete generateButton.dataset.generating;
             }
         } else {
             resetGenerateButton(loading, generateButton);
@@ -1332,23 +1391,57 @@ function displayCases(cases) {
     
     let html = '';
     cases.forEach(c => {
-        html += `<div class="case-item" onclick="loadCase('${c.case_id}')">`;
+        html += `<div class="case-item" onclick="loadCase('${escapeHtml(c.case_id)}')">`;
         html += `<div class="case-header">`;
-        html += `<span class="case-title">${c.case_name}</span>`;
-        html += `<span class="case-status ${c.status}">${c.status}</span>`;
+        html += `<span class="case-title">${escapeHtml(c.case_name)}</span>`;
+        html += `<span class="case-status ${escapeHtml(c.status)}">${escapeHtml(c.status)}</span>`;
         html += `</div>`;
         html += `<p style="font-size:14px; color:#666;">创建于：${new Date(c.created_at).toLocaleString()}</p>`;
+        const sourceFiles = c.source_files || [];
+        if (sourceFiles.length) {
+            html += `<p style="font-size:13px; color:#666;">绑定文件：${sourceFiles.map(item => escapeHtml(item.original_name || item.stored_name)).join('、')}</p>`;
+        }
         if (c.tags && c.tags.length > 0) {
             html += `<p style="margin-top:5px;">`;
             c.tags.forEach(tag => {
-                html += `<span class="badge" style="background:#999;">${tag}</span>`;
+                html += `<span class="badge" style="background:#999;">${escapeHtml(tag)}</span>`;
             });
             html += `</p>`;
         }
+        html += `<div style="margin-top:10px;">`;
+        html += `<button class="btn btn-sm btn-danger" onclick="deleteCase(event, '${escapeHtml(c.case_id)}', '${escapeHtml(c.case_name)}')">删除案例和对应文件</button>`;
+        html += `</div>`;
         html += `</div>`;
     });
     
     container.innerHTML = html;
+}
+
+async function deleteCase(event, caseId, caseName) {
+    event.stopPropagation();
+    const confirmed = confirm(`确认删除案例「${caseName}」吗？\n会同步删除该案例绑定、且未被其他案例引用的 uploads 文件。`);
+    if (!confirmed) return;
+
+    try {
+        const response = await fetch(`${API_BASE}/cases/${encodeURIComponent(caseId)}`, {
+            method: 'DELETE',
+        });
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`HTTP ${response.status}: ${errorText}`);
+        }
+        const result = await response.json();
+        if (currentCaseId === caseId) {
+            currentCaseId = null;
+            clearBoundCaseSourceFiles();
+        }
+        const deletedCount = result.deleted_files?.length || 0;
+        const retainedCount = result.retained_files?.length || 0;
+        alert(`案例已删除。已删除文件 ${deletedCount} 个${retainedCount ? `，仍被其他案例引用未删 ${retainedCount} 个` : ''}。`);
+        loadCases();
+    } catch (error) {
+        alert('删除案例失败：' + error.message);
+    }
 }
 
 // 加载单个案例

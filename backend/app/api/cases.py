@@ -29,6 +29,13 @@ class MarkErrorRequest(BaseModel):
     error_description: str
 
 
+class DeleteCaseResponse(BaseModel):
+    deleted: bool
+    deleted_files: list[str]
+    retained_files: list[str]
+    message: str
+
+
 class SearchKnowledgeRequest(BaseModel):
     query: str
     entry_type: Optional[str] = None
@@ -59,6 +66,20 @@ def get_case(case_id: str) -> ProcessCase:
     if not case:
         raise HTTPException(status_code=404, detail="案例不存在")
     return case
+
+
+@router.delete("/{case_id}", response_model=DeleteCaseResponse)
+def delete_case(case_id: str) -> DeleteCaseResponse:
+    """删除案例，同时清理不再被其他案例引用的 uploads 文件。"""
+    result = case_service.delete_case(case_id, delete_source_files=True)
+    if not result["deleted"]:
+        raise HTTPException(status_code=404, detail="案例不存在")
+    return DeleteCaseResponse(
+        deleted=True,
+        deleted_files=result["deleted_files"],
+        retained_files=result["retained_files"],
+        message="案例已删除",
+    )
 
 
 @router.post("/{case_id}/edit")

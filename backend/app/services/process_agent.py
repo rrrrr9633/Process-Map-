@@ -293,6 +293,65 @@ class ProcessAgent:
         )
         return images
 
+    def _image_payloads_from_explanations(
+        self,
+        explanations: list[DrawingExplanation],
+        max_images: int,
+    ) -> list[dict[str, str]]:
+        payloads: list[dict[str, str]] = []
+        for explanation in explanations:
+            page_explanations = explanation.page_explanations or []
+            if not page_explanations and explanation.page_asset:
+                page_explanations = [explanation]
+            for page_explanation in page_explanations:
+                asset = getattr(page_explanation, "page_asset", None)
+                if not asset or not asset.image_path:
+                    continue
+                path = Path(asset.image_path)
+                if not path.is_file():
+                    continue
+                payload = self._image_file_payload(path)
+                if not payload:
+                    continue
+                payload["name"] = f"file_{explanation.file_index:03d}_page_{getattr(page_explanation, 'page', asset.page)}_{path.name}"
+                payload["page"] = str(getattr(page_explanation, "page", asset.page))
+                payloads.append(payload)
+                if len(payloads) >= max_images:
+                    return payloads
+        return payloads
+
+    def _image_file_payload(self, path: Path) -> dict[str, str] | None:
+        if not path.is_file():
+            return None
+        suffix = path.suffix.lower()
+        mime_type = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+            ".bmp": "image/bmp",
+        }.get(suffix, "image/png")
+        try:
+            return {
+                "name": path.name,
+                "page": "1",
+                "mime_type": mime_type,
+                "base64": base64.b64encode(path.read_bytes()).decode("ascii"),
+            }
+        except OSError:
+            return None
+
+    def _render_cad_preview_payload(self, path: Path, trace: AgentRunTrace) -> list[dict[str, str]]:
+        trace.questions.append(
+            AgentQuestion(
+                field="cad_preview",
+                question="CAD 文件暂未生成可参与 AI 视觉分析的预览图，是否改传 PDF 或图片版图纸？",
+                reason=f"当前文件：{path.name}",
+                severity="warning",
+            )
+        )
+        return []
+
     def _build_agent_response(
         self,
         payload: dict[str, Any],
