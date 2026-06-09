@@ -45,6 +45,7 @@
                     <h3>上传图纸文件</h3>
                     <p style="color:#666; margin-bottom:10px;">支持批量上传 PDF、图片、DWG/DXF；多份文件会按选择顺序作为分步流程图合并分析。</p>
                     <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.dwg,.dxf" multiple>
+                    <div id="case-bound-files-hint" style="display:none; margin-top:10px;"></div>
                     <div id="file-info" class="file-info" style="display:none;"></div>
                     <p style="color:#999; font-size:13px; margin-top:8px;">
                         提示：上传后系统会调用后端解析接口；如果未接入 OCR/CAD 解析，会在结果中标出需要人工确认的原因。

@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     ai_api_key: str = ""
     ai_api_base: str = "https://api.deepseek.com/v1"
     ai_model_name: str = "deepseek-chat"
-    ai_timeout_seconds: float = 45
+    ai_timeout_seconds: float = 500
 
     # OCR 配置
     ocr_provider: str = "none"

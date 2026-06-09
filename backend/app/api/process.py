@@ -40,6 +40,11 @@ class ArchiveResponse(BaseModel):
     markdown: str
 
 
+class FromStoredJobRequest(BaseModel):
+    stored_names: list[str]
+    mode: ProcessMode = ProcessMode.STANDARD_8
+
+
 SUPPORTED_UPLOAD_SUFFIXES = {"pdf", "png", "jpg", "jpeg", "webp", "bmp", "dwg", "dxf"}
 
 
@@ -79,6 +84,27 @@ async def _store_upload(file: UploadFile, upload_dir: Path) -> Path:
         target.write(content)
     print(f"[process] stored uploaded file: {temp_path.name} <- {file.filename or 'unnamed'}", flush=True)
     return temp_path
+
+
+def _resolve_stored_uploads(stored_names: list[str], upload_dir: Path) -> list[Path]:
+    if not stored_names:
+        raise HTTPException(status_code=400, detail="请至少指定 1 个已存图纸文件名")
+    paths: list[Path] = []
+    upload_root = upload_dir.resolve()
+    for raw_name in stored_names:
+        safe_name = Path(raw_name).name
+        if not safe_name or safe_name in {".", ".."}:
+            raise HTTPException(status_code=400, detail=f"无效文件名：{raw_name}")
+        suffix = safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
+        if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
+            raise HTTPException(status_code=400, detail=f"暂不支持的文件格式：{safe_name}")
+        path = (upload_dir / safe_name).resolve()
+        if upload_root not in path.parents:
+            raise HTTPException(status_code=400, detail=f"非法路径：{raw_name}")
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail=f"uploads 中不存在：{safe_name}")
+        paths.append(path)
+    return paths
 
 
 async def _apply_ai_enhancement(
@@ -226,6 +252,24 @@ async def _run_process_job(job_id: str, file_paths: list[str], mode: ProcessMode
         for task in locals().get("pending", set()):
             task.cancel()
         job_service.fail(job_id, f"{type(exc).__name__}: {exc}")
+
+
+@router.post("/jobs/from-stored", response_model=ProcessJob)
+async def create_job_from_stored(
+    request: FromStoredJobRequest,
+    background_tasks: BackgroundTasks,
+) -> ProcessJob:
+    upload_dir = Path("./uploads")
+    upload_dir.mkdir(exist_ok=True, parents=True)
+    paths = _resolve_stored_uploads(request.stored_names, upload_dir)
+    path_strings = [str(path) for path in paths]
+    print(
+        f"[process] reuse stored uploads for job: {[path.name for path in paths]}",
+        flush=True,
+    )
+    job = job_service.create_job(path_strings)
+    background_tasks.add_task(_run_process_job, job.job_id, path_strings, request.mode)
+    return job
 
 
 @router.post("/jobs/upload-batch", response_model=ProcessJob)

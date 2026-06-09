@@ -8,6 +8,12 @@ let currentData = null;
 let currentCaseId = null;
 let isGeneratingProcess = false;
 let generationProgressTimer = null;
+let generationProgressSnapshot = {
+    extraItems: [],
+};
+let lastJob = null;
+let boundCaseSourceFiles = null;
+let boundCaseDisplayNames = [];
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -63,6 +69,7 @@ function bindFileUploadPreview() {
     if (!fileInput || !fileInfo) return;
 
     fileInput.addEventListener('change', () => {
+        clearBoundCaseSourceFiles();
         const files = Array.from(fileInput.files || []);
         if (!files.length) {
             fileInfo.style.display = 'none';
@@ -172,9 +179,68 @@ async function loadConfigStatus() {
     }
 }
 
-function renderGenerationProgress(stage, detail, startedAt, extraItems = [], activeKey = 'backend') {
-    const elapsedSeconds = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0;
-    const items = [
+
+function clearBoundCaseSourceFiles() {
+    boundCaseSourceFiles = null;
+    boundCaseDisplayNames = [];
+    updateBoundCaseFilesHint();
+}
+
+function updateBoundCaseFilesHint() {
+    const hint = document.getElementById('case-bound-files-hint');
+    if (!hint) return;
+    if (boundCaseSourceFiles?.length) {
+        const names = boundCaseDisplayNames.length
+            ? boundCaseDisplayNames.join('、')
+            : boundCaseSourceFiles.join('、');
+        hint.innerHTML = `<div class="info">案例图纸已绑定：<strong>${escapeHtml(names)}</strong>。再次生成将直接复用服务器 uploads 中已有文件，不走浏览器重传。</div>`;
+        hint.style.display = 'block';
+    } else {
+        hint.innerHTML = '';
+        hint.style.display = 'none';
+    }
+}
+
+function collectCaseSourceFilesFromData(data) {
+    const files = [];
+    const job = data?.process_job;
+    if (job?.files?.length) {
+        job.files.forEach((filePath, index) => {
+            const stored = String(filePath).split(/[\\/]/).pop();
+            const original = job.explanations?.[index]?.file_name || stored;
+            if (stored) files.push({ stored_name: stored, original_name: original });
+        });
+    }
+    return files;
+}
+
+async function startJobFromStoredFiles(storedNames, mode, startedAt, uploadInfo) {
+    const response = await fetch(`${API_BASE}/process/jobs/from-stored`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stored_names: storedNames, mode }),
+    });
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+    const job = await response.json();
+    setGenerationProgress(
+        '已复用 uploads 图纸，任务处理中',
+        `任务 ${job.job_id} 已创建，跳过了浏览器重复上传。`,
+        startedAt,
+        [
+            { key: 'job-id', label: '任务 ID', value: job.job_id },
+            { key: 'upload-files', label: '图纸文件', value: uploadInfo.name },
+        ],
+        'backend',
+    );
+    return pollProcessJob(job.job_id, startedAt, uploadInfo);
+}
+
+
+function getGenerationProgressItems(extraItems = []) {
+    const baseItems = [
         { key: 'request', label: '前端请求', value: '已准备生成参数并发起请求' },
         { key: 'upload', label: '文件上传', value: '正在把图纸文件发送到后端' },
         { key: 'backend', label: '后端预处理', value: '复用或保存文件，准备图纸渲染和 AI 识别输入' },
@@ -183,19 +249,30 @@ function renderGenerationProgress(stage, detail, startedAt, extraItems = [], act
         { key: 'ai-generate', label: 'AI 生成内容', value: '模型正在生成结构化工序、流程图和确认项' },
         { key: 'ai-timeout', label: 'AI 超时边界', value: '等待模型返回；失败后任务会明确失败' },
         { key: 'result', label: '结果返回', value: '等待工序方案、流程图、Agent 链路和人工确认项返回前端' },
-        ...extraItems,
     ];
+    const merged = new Map(baseItems.map(item => [item.key, item]));
+    for (const item of [...generationProgressSnapshot.extraItems, ...extraItems]) {
+        if (!item || !item.key) continue;
+        merged.set(item.key, item);
+    }
+    generationProgressSnapshot.extraItems = Array.from(merged.values()).filter(item => !baseItems.some(base => base.key === item.key));
+    return Array.from(merged.values());
+}
+
+function renderGenerationProgress(stage, detail, startedAt, extraItems = [], activeKey = 'backend') {
+    const elapsedSeconds = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0;
+    const items = getGenerationProgressItems(extraItems);
     return `
         <div class="progress-panel">
             <div class="progress-panel-header">
-                <strong>${escapeHtml(stage)}</strong>
-                <span>已等待 ${elapsedSeconds} 秒</span>
+                <strong data-progress-stage>${escapeHtml(stage)}</strong>
+                <span data-progress-elapsed>已等待 ${elapsedSeconds} 秒</span>
             </div>
-            <div class="progress-current"><span class="progress-inline-spinner"></span>${escapeHtml(detail)}</div>
+            <div class="progress-current"><span class="progress-inline-spinner"></span><span data-progress-detail>${escapeHtml(detail)}</span></div>
             <div class="progress-steps">
                 ${items.map(item => `
-                    <div class="progress-step ${item.key === activeKey ? 'active' : ''}">
-                        <strong>${item.key === activeKey ? '<span class="progress-step-spinner"></span>' : ''}${escapeHtml(item.label)}</strong>
+                    <div class="progress-step ${item.key === activeKey ? 'active' : ''}" data-progress-key="${escapeHtml(item.key)}">
+                        <strong><span class="progress-step-spinner"></span>${escapeHtml(item.label)}</strong>
                         <span>${escapeHtml(item.value)}</span>
                     </div>
                 `).join('')}
@@ -204,11 +281,36 @@ function renderGenerationProgress(stage, detail, startedAt, extraItems = [], act
     `;
 }
 
-function setGenerationProgress(stage, detail, startedAt, extraItems = [], activeKey = 'backend') {
+function updateGenerationProgressDom(stage, detail, startedAt, extraItems = [], activeKey = 'backend') {
     const loading = document.getElementById('generate-loading');
     if (!loading) return;
-    loading.innerHTML = renderGenerationProgress(stage, detail, startedAt, extraItems, activeKey);
+
+    const incomingKeys = extraItems.map(item => item?.key).filter(Boolean).sort().join('|');
+    const currentKeys = generationProgressSnapshot.extraItems.map(item => item.key).sort().join('|');
+    const needsFullRender = !loading.querySelector('.progress-panel') || (incomingKeys && incomingKeys !== currentKeys);
+
+    if (needsFullRender) {
+        loading.innerHTML = renderGenerationProgress(stage, detail, startedAt, extraItems, activeKey);
+        loading.classList.add('active');
+        return;
+    }
+
+    const elapsedSeconds = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0;
+    const stageNode = loading.querySelector('[data-progress-stage]');
+    const elapsedNode = loading.querySelector('[data-progress-elapsed]');
+    const detailNode = loading.querySelector('[data-progress-detail]');
+    if (stageNode) stageNode.textContent = stage;
+    if (elapsedNode) elapsedNode.textContent = `已等待 ${elapsedSeconds} 秒`;
+    if (detailNode) detailNode.textContent = detail;
+
+    loading.querySelectorAll('.progress-step').forEach(step => {
+        step.classList.toggle('active', step.dataset.progressKey === activeKey);
+    });
     loading.classList.add('active');
+}
+
+function setGenerationProgress(stage, detail, startedAt, extraItems = [], activeKey = 'backend') {
+    updateGenerationProgressDom(stage, detail, startedAt, extraItems, activeKey);
 }
 
 function stopGenerationProgressTimer() {
@@ -241,7 +343,7 @@ function getAiWaitStage(elapsedSeconds) {
             activeKey: 'ai-connect',
         };
     }
-    if (elapsedSeconds < 45) {
+    if (elapsedSeconds < 120) {
         return {
             stage: 'AI 生成结构化方案',
             detail: '模型正在生成图纸理解、工序拆分、流程图和人工确认项；终端会显示 chunk 和字符数增长。',
@@ -250,7 +352,7 @@ function getAiWaitStage(elapsedSeconds) {
     }
     return {
         stage: 'AI 等待超时边界',
-        detail: 'AI 已等待较久；如果终端没有持续 chunks，优先检查模型接口、网关或超时配置。失败后任务会明确失败，不再回退到本地兜底结果。',
+        detail: 'AI 已等待较久（后端/网关建议 ≥500 秒）；如果终端没有持续 chunks，优先检查 Nginx proxy_read_timeout 与 new-api 网关超时。失败后任务会明确失败，不再展示旧结果。',
         activeKey: 'ai-timeout',
     };
 }
@@ -424,7 +526,7 @@ function requestWithUploadProgress(url, formData, startedAt, uploadInfo) {
         xhr.upload.onprogress = event => {
             if (!event.lengthComputable) return;
             const percent = Math.round((event.loaded / event.total) * 100);
-            startGenerationProgressTimer(
+            setGenerationProgress(
                 '正在上传图纸文件',
                 `文件正在传输到后端：${percent}%（${formatFileSize(event.loaded)} / ${formatFileSize(event.total)}）`,
                 startedAt,
@@ -484,6 +586,7 @@ async function generateProcess() {
     const result = document.getElementById('generate-result');
     const generateButton = document.getElementById('generate-process-btn');
     const startedAt = Date.now();
+    generationProgressSnapshot = { extraItems: [] };
     
     result.classList.remove('active');
     startGenerationProgressTimer(
@@ -544,48 +647,72 @@ async function generateProcess() {
             });
         } else if (method === 'file') {
             const fileInput = document.getElementById('file-input');
-            if (!fileInput.files.length) {
+            const selectedFiles = Array.from(fileInput.files || []);
+            const useBoundCaseFiles = !selectedFiles.length && boundCaseSourceFiles?.length;
+
+            if (!selectedFiles.length && !useBoundCaseFiles) {
                 resetGenerateButton(loading, generateButton);
-                alert('请选择文件');
+                alert('请选择文件，或先从案例库加载带图纸绑定的案例');
                 return;
             }
 
-            const files = Array.from(fileInput.files);
-            const supportedSuffixes = ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'bmp', 'dwg', 'dxf'];
-            const unsupportedFile = files.find(file => !supportedSuffixes.includes(getFileSuffix(file.name)));
-            if (unsupportedFile) {
-                resetGenerateButton(loading, generateButton);
-                alert(`暂不支持 ${unsupportedFile.name} 的文件格式，请上传 PDF、图片或 DWG/DXF 文件`);
-                return;
-            }
+            let job;
+            if (useBoundCaseFiles) {
+                uploadInfo = {
+                    name: boundCaseDisplayNames.join('、') || boundCaseSourceFiles.join('、'),
+                    size: 0,
+                    suffix: 'stored',
+                    supportNote: '复用案例绑定的 uploads 文件，跳过浏览器上传',
+                };
+                startGenerationProgressTimer(
+                    '复用案例图纸',
+                    `将直接使用 uploads 中的 ${boundCaseSourceFiles.length} 个文件创建任务。`,
+                    startedAt,
+                    [
+                        { key: 'upload-files', label: '图纸文件', value: uploadInfo.name },
+                        { key: 'upload-mode', label: '来源', value: '案例库 / uploads 复用' },
+                    ],
+                    'backend',
+                );
+                job = await startJobFromStoredFiles(boundCaseSourceFiles, mode, startedAt, uploadInfo);
+            } else {
+                const files = selectedFiles;
+                const supportedSuffixes = ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'bmp', 'dwg', 'dxf'];
+                const unsupportedFile = files.find(file => !supportedSuffixes.includes(getFileSuffix(file.name)));
+                if (unsupportedFile) {
+                    resetGenerateButton(loading, generateButton);
+                    alert(`暂不支持 ${unsupportedFile.name} 的文件格式，请上传 PDF、图片或 DWG/DXF 文件`);
+                    return;
+                }
 
-            const formData = new FormData();
-            files.forEach(file => formData.append('files', file));
-            uploadInfo = {
-                name: files.map(file => file.name).join('、'),
-                size: files.reduce((total, file) => total + file.size, 0),
-                suffix: files.length > 1 ? 'batch' : getFileSuffix(files[0].name),
-                supportNote: files.length > 1
-                    ? `批量上传 ${files.length} 个文件：先逐份逐页图解，再合并生成工艺流程`
-                    : getUploadSupportNote(getFileSuffix(files[0].name))
-            };
-            const endpoint = '/process/jobs/upload-batch';
-            startGenerationProgressTimer(
-                '后端任务接口已调用',
-                `正在发送 ${files.length} 个文件到 ${endpoint}。上传完成后会创建任务，逐份生成图解、气泡图和汇总流程。`,
-                startedAt,
-                [
-                    { label: '上传文件', value: files.map(file => file.name).join('、') },
-                    { label: '总大小', value: formatFileSize(uploadInfo.size) },
-                ],
-                'upload',
-            );
-            const job = await uploadWithJobProgress(
-                `${API_BASE}${endpoint}?mode=${mode}`,
-                formData,
-                startedAt,
-                uploadInfo,
-            );
+                const formData = new FormData();
+                files.forEach(file => formData.append('files', file));
+                uploadInfo = {
+                    name: files.map(file => file.name).join('、'),
+                    size: files.reduce((total, file) => total + file.size, 0),
+                    suffix: files.length > 1 ? 'batch' : getFileSuffix(files[0].name),
+                    supportNote: files.length > 1
+                        ? `批量上传 ${files.length} 个文件：先逐份逐页图解，再合并生成工艺流程`
+                        : getUploadSupportNote(getFileSuffix(files[0].name))
+                };
+                const endpoint = '/process/jobs/upload-batch';
+                startGenerationProgressTimer(
+                    '后端任务接口已调用',
+                    `正在发送 ${files.length} 个文件到 ${endpoint}。上传完成后会创建任务，逐份生成图解、气泡图和汇总流程。`,
+                    startedAt,
+                    [
+                        { key: 'upload-files', label: '上传文件', value: files.map(file => file.name).join('、') },
+                        { key: 'upload-size', label: '总大小', value: formatFileSize(uploadInfo.size) },
+                    ],
+                    'upload',
+                );
+                job = await uploadWithJobProgress(
+                    `${API_BASE}${endpoint}?mode=${mode}`,
+                    formData,
+                    startedAt,
+                    uploadInfo,
+                );
+            }
             const data = job.process_result;
             if (!data) {
                 throw new Error('任务已完成但没有返回流程结果');
@@ -661,12 +788,14 @@ async function generateProcess() {
     } catch (error) {
         keepProgressVisible = true;
         stopGenerationProgressTimer();
+        result.classList.remove('active');
+        result.innerHTML = '';
         setGenerationProgress(
             '生成失败',
             error.message,
             startedAt,
             [
-                { key: 'suggestion', label: '处理建议', value: '查看后端终端日志和页面人工确认项；如果是 AI 401/502，优先检查密钥、模型名、接口地址和后端是否重启。' },
+                { key: 'suggestion', label: '处理建议', value: '413 调大 Nginx client_max_body_size；504 调大 proxy_read_timeout 与 new-api 网关超时（建议 500s）。失败后不会保留上一次结果，可直接再次点击生成。' },
             ],
             'result',
         );
@@ -1115,6 +1244,7 @@ async function saveAsCase() {
             case_id: 'case_' + Date.now(),
             case_name: caseName,
             drawing_parse_result: currentData.parse_result,
+            source_files: collectCaseSourceFilesFromData(currentData),
             process_plan: currentData.process_plan,
             external_conditions: null,
             human_edits: [],
@@ -1203,16 +1333,23 @@ async function loadCase(caseId) {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         
         const caseData = await response.json();
+        const sourceFiles = caseData.source_files || [];
+        boundCaseSourceFiles = sourceFiles.map(item => item.stored_name).filter(Boolean);
+        boundCaseDisplayNames = sourceFiles.map(item => item.original_name || item.stored_name).filter(Boolean);
         currentData = {
             parse_result: caseData.drawing_parse_result,
             process_plan: caseData.process_plan,
-            flow: null // TODO: 重新生成流程图
+            flow: null,
+            loaded_case_name: caseData.case_name,
+            loaded_case_id: caseId,
         };
         currentCaseId = caseId;
-        
-        // 切换到生成标签页并显示
-        document.querySelectorAll('.tab')[0].click();
-        alert('案例已加载！');
+        document.getElementById('input-method').value = 'file';
+        toggleInputMethod();
+        updateBoundCaseFilesHint();
+        switchTab('generate', document.querySelector('.tab[data-tab="generate"]'));
+        displayResult(currentData);
+        alert(`案例「${caseData.case_name}」已加载到生成页；${boundCaseSourceFiles.length ? '已绑定 uploads 图纸，可直接再次生成。' : '该案例未记录图纸文件，需重新上传或重新保存案例。'}`);
     } catch (error) {
         alert('加载案例失败：' + error.message);
     }
@@ -1252,6 +1389,7 @@ async function downloadMarkdown() {
 
 // 清空表单
 function clearForm() {
+    clearBoundCaseSourceFiles();
     document.getElementById('text-input').value = '';
     document.getElementById('json-input').value = '';
     document.getElementById('file-input').value = '';
