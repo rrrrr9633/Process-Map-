@@ -248,7 +248,8 @@ function getGenerationProgressItems(extraItems = []) {
         { key: 'ai-connect', label: 'AI 连接模型', value: '请求已发出，等待模型建立响应或首段内容' },
         { key: 'ai-generate', label: 'AI 生成内容', value: '模型正在生成结构化工序、流程图和确认项' },
         { key: 'ai-timeout', label: 'AI 超时边界', value: '等待模型返回；失败后任务会明确失败' },
-        { key: 'result', label: '结果返回', value: '等待工序方案、流程图、Agent 链路和人工确认项返回前端' },
+        { key: 'failed', label: '失败处理', value: '任务失败后停留在当前页，清空旧结果并展示失败原因' },
+        { key: 'result', label: '结果返回', value: '仅当任务完成并返回工序方案后，才展示结果' },
     ];
     const merged = new Map(baseItems.map(item => [item.key, item]));
     for (const item of [...generationProgressSnapshot.extraItems, ...extraItems]) {
@@ -371,7 +372,7 @@ function startAiProgressTimer(startedAt, extraItems = []) {
 function getProcessJobActiveKey(job) {
     if (!job) return 'backend';
     if (job.status === 'completed' || job.stage === 'completed') return 'result';
-    if (job.status === 'failed' || job.stage === 'failed') return 'result';
+    if (job.status === 'failed' || job.stage === 'failed') return 'failed';
 
     const stage = String(job.stage || '').toLowerCase();
     if (['queued', 'created', 'uploading', 'uploaded'].includes(stage)) return 'upload';
@@ -392,9 +393,12 @@ async function pollProcessJob(jobId, startedAt, uploadInfo) {
         }
         const job = await response.json();
         lastJob = job;
+        const isFailed = job.status === 'failed' || job.stage === 'failed';
         setGenerationProgress(
-            job.message || '任务处理中',
-            `阶段：${job.stage}；进度：${job.progress || 0}%；已生成图解 ${job.explanations?.length || 0} 份。`,
+            job.message || (isFailed ? '任务失败' : '任务处理中'),
+            isFailed
+                ? `失败原因：${job.error || job.message || '任务失败'}；已生成图解 ${job.explanations?.length || 0} 份，未生成可用工序结果。`
+                : `阶段：${job.stage}；进度：${job.progress || 0}%；已生成图解 ${job.explanations?.length || 0} 份。`,
             startedAt,
             [
                 { key: 'job-id', label: '任务 ID', value: job.job_id },
@@ -622,6 +626,9 @@ async function generateProcess() {
     
     let keepProgressVisible = false;
     try {
+        currentData = null;
+        currentCaseId = null;
+        lastJob = null;
         let response;
         let uploadInfo = null;
         
@@ -787,17 +794,24 @@ async function generateProcess() {
         
     } catch (error) {
         keepProgressVisible = true;
+        currentData = null;
+        currentCaseId = null;
         stopGenerationProgressTimer();
         result.classList.remove('active');
         result.innerHTML = '';
+        const failureItems = [
+            { key: 'failed-reason', label: '失败原因', value: error.message },
+            { key: 'suggestion', label: '处理建议', value: '504 是 AI 网关首段响应超时。需要调大 new-api 网关超时，或减少单次图纸/图片输入；失败后不会保留上一次结果。' },
+        ];
+        if (lastJob?.job_id) {
+            failureItems.unshift({ key: 'job-id', label: '任务 ID', value: lastJob.job_id });
+        }
         setGenerationProgress(
             '生成失败',
             error.message,
             startedAt,
-            [
-                { key: 'suggestion', label: '处理建议', value: '413 调大 Nginx client_max_body_size；504 调大 proxy_read_timeout 与 new-api 网关超时（建议 500s）。失败后不会保留上一次结果，可直接再次点击生成。' },
-            ],
-            'result',
+            failureItems,
+            'failed',
         );
         alert('生成失败：' + error.message);
         console.error(error);
@@ -1057,16 +1071,25 @@ function displayResult(data) {
     html += '</div>';
     
     // 可读流程
+    const flow = data.flow || {
+        title: data.loaded_case_name ? `案例流程：${data.loaded_case_name}` : '流程图',
+        mermaid: '',
+    };
     html += '<div class="result-section">';
-    html += `<h3>${escapeHtml(data.flow.title || '流程图')}</h3>`;
-    html += '<p class="flow-readable-hint">默认展示按工序顺序展开的人话版流程；原始 Mermaid 技术图保留在下方，可横向滚动查看。</p>';
+    html += `<h3>${escapeHtml(flow.title || '流程图')}</h3>`;
+    if (data.loaded_case_name) {
+        html += `<div class="info"><strong>案例来源：</strong>${escapeHtml(data.loaded_case_name)}。当前案例已加载为输入来源；如已绑定图纸，点击“生成工序方案”会复用对应 uploads 文件重新生成。</div>`;
+    }
+    html += '<p class="flow-readable-hint">默认展示按工序顺序展开的人话版流程；原始 Mermaid 技术图只在后端返回流程图时展示。</p>';
     html += renderReadableFlow(data.process_plan.operations || []);
-    html += '<details class="technical-flow-details">';
-    html += '<summary>查看原始技术流程图</summary>';
-    html += '<div class="mermaid-scroll">';
-    html += `<div class="mermaid-diagram" id="mermaid-diagram">${data.flow.mermaid}</div>`;
-    html += '</div>';
-    html += '</details>';
+    if (flow.mermaid) {
+        html += '<details class="technical-flow-details">';
+        html += '<summary>查看原始技术流程图</summary>';
+        html += '<div class="mermaid-scroll">';
+        html += `<div class="mermaid-diagram" id="mermaid-diagram">${flow.mermaid}</div>`;
+        html += '</div>';
+        html += '</details>';
+    }
     html += '</div>';
     
     // 操作按钮
@@ -1080,17 +1103,19 @@ function displayResult(data) {
     container.classList.add('active');
     
     // 渲染流程图
-    setTimeout(() => {
-        const element = document.getElementById('mermaid-diagram');
-        if (element) {
-            mermaid.render('mermaid-svg-' + Date.now(), data.flow.mermaid).then(result => {
-                element.innerHTML = result.svg;
-            }).catch(err => {
-                console.error('Mermaid rendering error:', err);
-                element.innerHTML = '<pre>' + data.flow.mermaid + '</pre>';
-            });
-        }
-    }, 100);
+    if (flow.mermaid) {
+        setTimeout(() => {
+            const element = document.getElementById('mermaid-diagram');
+            if (element) {
+                mermaid.render('mermaid-svg-' + Date.now(), flow.mermaid).then(result => {
+                    element.innerHTML = result.svg;
+                }).catch(err => {
+                    console.error('Mermaid rendering error:', err);
+                    element.innerHTML = '<pre>' + escapeHtml(flow.mermaid) + '</pre>';
+                });
+            }
+        }, 100);
+    }
 }
 
 async function saveAnnotationEdit(jobId, annotationId) {
