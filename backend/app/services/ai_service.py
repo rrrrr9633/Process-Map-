@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 
@@ -448,7 +449,7 @@ class AIService:
             print(f"[ai] stream connected: status={response.status_code}", flush=True)
             if response.status_code >= 400:
                 print(f"[ai] stream rejected: status={response.status_code}", flush=True)
-                self._raise_for_ai_response(response)
+                await self._raise_for_ai_response(response)
             async for line in response.aiter_lines():
                 line = line.strip()
                 if not line or not line.startswith("data:"):
@@ -477,8 +478,8 @@ class AIService:
         print(f"[ai] stream closed: chunks={chunk_count}, chars={len(content)}", flush=True)
         return content
 
-    def _raise_for_ai_response(self, response: httpx.Response) -> None:
-        detail = self._response_error_detail(response)
+    async def _raise_for_ai_response(self, response: httpx.Response) -> None:
+        detail = await self._response_error_detail(response)
         if response.status_code == 502:
             raise AIServiceError(f"AI 服务网关暂时不可用（502），请稍后重试或检查 AI_API_BASE{detail}")
         if response.status_code == 504:
@@ -488,8 +489,12 @@ class AIService:
         if response.status_code >= 400:
             raise AIServiceError(f"AI 请求失败（HTTP {response.status_code}），请检查模型名称、密钥或接口地址{detail}")
 
-    def _response_error_detail(self, response: httpx.Response) -> str:
-        text = response.text.strip()
+    async def _response_error_detail(self, response: httpx.Response) -> str:
+        try:
+            body = await response.aread()
+        except Exception:
+            body = b""
+        text = body.decode(response.encoding or "utf-8", errors="replace").strip()
         if not text:
             return ""
         compact = " ".join(text.split())
