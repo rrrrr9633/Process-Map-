@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 from uuid import uuid4
 
@@ -34,6 +35,19 @@ def _upload_suffix(file: UploadFile) -> str:
     return file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else "bin"
 
 
+def _find_existing_upload(upload_dir: Path, suffix: str, content: bytes) -> Path | None:
+    digest = hashlib.sha256(content).hexdigest()
+    for candidate in upload_dir.glob(f"*.{suffix}"):
+        if not candidate.is_file() or candidate.stat().st_size != len(content):
+            continue
+        try:
+            if hashlib.sha256(candidate.read_bytes()).hexdigest() == digest:
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
 async def _store_upload(file: UploadFile, upload_dir: Path) -> Path:
     suffix = _upload_suffix(file)
     if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
@@ -43,9 +57,15 @@ async def _store_upload(file: UploadFile, upload_dir: Path) -> Path:
     if not content:
         raise HTTPException(status_code=400, detail=f"上传文件为空：{file.filename or '未命名文件'}")
 
+    existing_path = _find_existing_upload(upload_dir, suffix, content)
+    if existing_path:
+        print(f"[process] reuse uploaded file: {existing_path.name} <- {file.filename or 'unnamed'}", flush=True)
+        return existing_path
+
     temp_path = upload_dir / f"{uuid4().hex}.{suffix}"
     with open(temp_path, "wb") as target:
         target.write(content)
+    print(f"[process] stored uploaded file: {temp_path.name} <- {file.filename or 'unnamed'}", flush=True)
     return temp_path
 
 

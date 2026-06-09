@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     ai_api_key: str = ""
     ai_api_base: str = "https://api.deepseek.com/v1"
     ai_model_name: str = "deepseek-chat"
-    ai_timeout_seconds: float = 500
+    ai_timeout_seconds: float = 45
     
     # OCR 配置
     ocr_provider: str = "none"
@@ -23,10 +23,11 @@ class Settings(BaseSettings):
     vision_provider: str = "none"
     vision_api_key: str = ""
     vision_api_base: str = ""
+    vision_model: str = ""
 
     # Agent 配置
     agent_enabled: bool = True
-    agent_max_images: int = 6
+    agent_max_images: int = 1
     agent_max_pdf_text_chars: int = 12000
     agent_goal: str = "根据 PDF 图纸中的复杂图片和标注拆分为可执行工艺流程图"
     

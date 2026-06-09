@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from pydantic import ValidationError
@@ -112,13 +113,34 @@ class ProcessAgent:
         trace = AgentRunTrace(goal=f"{settings.agent_goal}，并合并多份分步图纸为工人生产指导流程")
         trace.stages.append(f"接收分步图纸 {len(file_paths)} 份")
 
-        stage_results: list[AgentProcessResponse] = []
-        for index, file_path in enumerate(file_paths, start=1):
-            stage_response = await self.run_from_file(file_path, mode)
-            stage_results.append(stage_response)
-            trace.stages.append(f"完成第 {index} 份图纸分析：{Path(file_path).name}")
+        parse_results: list[DrawingParseResult] = []
+        image_payloads: list[dict[str, str]] = []
 
-        if not stage_results:
+        for index, file_path in enumerate(file_paths, start=1):
+            path = Path(file_path)
+            started_at = perf_counter()
+            print(f"[process] batch local step {index}/{len(file_paths)} start: {path.name}", flush=True)
+            if path.suffix.lower() == ".pdf":
+                parse_result = DrawingParseResult(
+                    raw_text="",
+                    risk_flags=[
+                        RiskFlag(
+                            field="pdf_text",
+                            message="批量 PDF 已跳过逐份文本抽取，优先进入 AI 视觉合并分析",
+                            severity="info",
+                        )
+                    ],
+                )
+            else:
+                parse_result = self.parser.parse_file(path)
+            parse_results.append(parse_result)
+            if not image_payloads:
+                image_payloads.extend(self._extract_images(path, trace)[:1])
+            elapsed_ms = int((perf_counter() - started_at) * 1000)
+            print(f"[process] batch local step {index}/{len(file_paths)} done in {elapsed_ms}ms: {path.name}", flush=True)
+            trace.stages.append(f"完成第 {index} 份图纸本地解析：{path.name}")
+
+        if not parse_results:
             fallback_parse = DrawingParseResult(risk_flags=[RiskFlag(field="files", message="未收到可分析的图纸文件", severity="critical")])
             fallback_plan = self.generator.generate(fallback_parse, mode)
             return AgentProcessResponse(
@@ -131,68 +153,68 @@ class ProcessAgent:
                 agent_trace=trace,
             )
 
-        parse_result = stage_results[0].parse_result.model_copy(deep=True)
-        parse_result.raw_text = "\n\n".join(
-            [item.parse_result.raw_text or "" for item in stage_results if item.parse_result.raw_text]
+        parse_result = parse_results[0].model_copy(deep=True)
+        parse_result.raw_text = "\n\n".join([item.raw_text or "" for item in parse_results if item.raw_text])
+        for item in parse_results[1:]:
+            parse_result.features.extend(item.features)
+            parse_result.tolerances.extend(item.tolerances)
+            parse_result.technical_requirements.extend(item.technical_requirements)
+            parse_result.inspection_requirements.extend(item.inspection_requirements)
+            parse_result.risk_flags.extend(item.risk_flags)
+
+        fallback_plan = self.generator.generate(parse_result, mode)
+        trace.artifacts.append(
+            AgentArtifact(
+                kind="fallback",
+                title="批量图纸本地兜底方案",
+                content=fallback_plan.model_dump(mode="json"),
+                confidence=0.35,
+            )
         )
-        for item in stage_results[1:]:
-            parse_result.features.extend(item.parse_result.features)
-            parse_result.tolerances.extend(item.parse_result.tolerances)
-            parse_result.technical_requirements.extend(item.parse_result.technical_requirements)
-            parse_result.inspection_requirements.extend(item.parse_result.inspection_requirements)
-            parse_result.risk_flags.extend(item.parse_result.risk_flags)
 
-        operations = []
-        for stage_index, item in enumerate(stage_results, start=1):
-            for operation_index, operation in enumerate(item.process_plan.operations, start=1):
-                merged_operation = operation.model_copy(deep=True)
-                merged_operation.operation_no = f"{stage_index:02d}-{operation_index:02d}"
-                merged_operation.operation_name = f"第{stage_index}步图纸｜{merged_operation.operation_name}"
-                merged_operation.drawing_basis.insert(0, f"来源文件：{Path(file_paths[stage_index - 1]).name}")
-                operations.append(merged_operation)
+        if settings.agent_enabled and ai_service.enabled:
+            try:
+                trace.stages.append("AI Agent 合并分析批量图纸")
+                print(
+                    f"[process] batch ai start: files={len(file_paths)}, images={len(image_payloads[:1])}, text_chars={len(parse_result.raw_text or '')}",
+                    flush=True,
+                )
+                ai_started_at = perf_counter()
+                payload = await ai_service.analyze_drawing_for_process_flow(
+                    goal=trace.goal,
+                    pdf_text=parse_result.raw_text or "",
+                    image_payloads=image_payloads[:1],
+                    mode=mode.value,
+                    fallback_plan=fallback_plan.model_dump(mode="json"),
+                )
+                elapsed_ms = int((perf_counter() - ai_started_at) * 1000)
+                print(f"[process] batch ai done in {elapsed_ms}ms", flush=True)
+                trace.used_ai = True
+                trace.used_vision = bool(image_payloads)
+                return self._build_agent_response(payload, fallback_plan, parse_result, trace, mode)
+            except Exception as exc:
+                print(f"[process] batch ai failed: {type(exc).__name__}: {exc}", flush=True)
+                trace.questions.append(
+                    AgentQuestion(
+                        field="ai_agent",
+                        question="AI Agent 批量合并分析失败，已使用本地规则结果避免继续卡住。",
+                        reason=f"{type(exc).__name__}: {exc}",
+                        severity="warning",
+                    )
+                )
 
-        process_plan = ProcessPlan(
-            mode=mode,
-            title="多图纸分步生产指导流程",
-            operations=operations,
-            requires_manual_review=any(item.process_plan.requires_manual_review for item in stage_results),
-        )
-        self._normalize_worker_guidance(process_plan)
-        process_plan.validation_issues = self.validator.validate(parse_result, process_plan)
-        flow = self.flow_builder.build(process_plan)
-
-        annotations = []
-        export_rows = []
-        for stage_index, item in enumerate(stage_results, start=1):
-            for annotation in item.annotation_result.annotations:
-                merged_annotation = annotation.model_copy(deep=True)
-                merged_annotation.annotation_id = f"S{stage_index}-{merged_annotation.annotation_id}"
-                annotations.append(merged_annotation)
-            for row in item.annotation_result.export_rows:
-                merged_row = row.model_copy(deep=True)
-                merged_row.row_no = len(export_rows) + 1
-                merged_row.annotation_id = f"S{stage_index}-{merged_row.annotation_id}"
-                export_rows.append(merged_row)
-
-        annotation_result = DrawingAnnotationResult(
-            annotations=annotations,
-            export_rows=export_rows,
-            bubble_diagram_available=any(item.annotation_result.bubble_diagram_available for item in stage_results),
-            review_required_count=sum(item.annotation_result.review_required_count for item in stage_results),
-        )
-        trace.used_ai = any(item.agent_trace.used_ai for item in stage_results)
-        trace.used_vision = any(item.agent_trace.used_vision for item in stage_results)
-        trace.fallback_used = any(item.agent_trace.fallback_used for item in stage_results)
-        for item in stage_results:
-            trace.questions.extend(item.agent_trace.questions)
+        trace.fallback_used = True
+        fallback_plan.requires_manual_review = True
+        fallback_plan.validation_issues = self.validator.validate(parse_result, fallback_plan)
+        flow = self.flow_builder.build(fallback_plan)
 
         return AgentProcessResponse(
             parse_result=parse_result,
-            annotation_result=annotation_result,
-            process_plan=process_plan,
+            annotation_result=DrawingAnnotationResult(),
+            process_plan=fallback_plan,
             flow=flow,
             similar_cases=[],
-            ai_suggestions=["已将多份分步图纸合并为面向工人的生产指导流程"],
+            ai_suggestions=["已合并批量图纸；当前使用本地快速结果，避免逐文件 AI 处理卡死"],
             agent_trace=trace,
         )
 

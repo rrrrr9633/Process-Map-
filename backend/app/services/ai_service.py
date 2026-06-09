@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from time import perf_counter
 from typing import Any
 
 import httpx
@@ -289,28 +290,44 @@ class AIService:
         }
         stream_payload = dict(payload)
         stream_payload["stream"] = True
+        request_started_at = perf_counter()
+        print(
+            f"[ai] prepare request: provider={self.provider}, model={self.model_name}, timeout={self.timeout_seconds}s, messages={len(payload.get('messages', []))}",
+            flush=True,
+        )
 
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            print("[ai] stream request start: json_mode=true", flush=True)
             response = await self._post_stream(client, headers, stream_payload)
             if response is not None:
+                elapsed_ms = int((perf_counter() - request_started_at) * 1000)
+                print(f"[ai] stream request done in {elapsed_ms}ms, chars={len(response)}", flush=True)
                 return response
 
             if "response_format" in stream_payload:
                 fallback_payload = dict(stream_payload)
                 fallback_payload.pop("response_format", None)
+                print("[ai] stream retry start: json_mode=false", flush=True)
                 response = await self._post_stream(client, headers, fallback_payload)
                 if response is not None:
+                    elapsed_ms = int((perf_counter() - request_started_at) * 1000)
+                    print(f"[ai] stream retry done in {elapsed_ms}ms, chars={len(response)}", flush=True)
                     return response
 
             non_stream_payload = dict(payload)
             non_stream_payload["stream"] = False
+            print("[ai] non-stream request start: json_mode=true", flush=True)
             response = await client.post(f"{self.api_base}/chat/completions", headers=headers, json=non_stream_payload)
             if response.status_code in {400, 422} and "response_format" in non_stream_payload:
                 non_stream_payload.pop("response_format", None)
+                print(f"[ai] non-stream retry start: status={response.status_code}, json_mode=false", flush=True)
                 response = await client.post(f"{self.api_base}/chat/completions", headers=headers, json=non_stream_payload)
             self._raise_for_ai_response(response)
             data = response.json()
-        return data["choices"][0]["message"]["content"]
+        content = data["choices"][0]["message"]["content"]
+        elapsed_ms = int((perf_counter() - request_started_at) * 1000)
+        print(f"[ai] non-stream request done in {elapsed_ms}ms, chars={len(content)}", flush=True)
+        return content
 
     async def _post_stream(
         self,
@@ -319,16 +336,21 @@ class AIService:
         payload: dict[str, Any],
     ) -> str | None:
         content_parts: list[str] = []
+        chunk_count = 0
+        started_at = perf_counter()
         async with client.stream("POST", f"{self.api_base}/chat/completions", headers=headers, json=payload) as response:
-            if response.status_code in {400, 422, 502}:
+            print(f"[ai] stream connected: status={response.status_code}", flush=True)
+            if response.status_code >= 400:
+                print(f"[ai] stream rejected: status={response.status_code}", flush=True)
                 return None
-            self._raise_for_ai_response(response)
             async for line in response.aiter_lines():
                 line = line.strip()
                 if not line or not line.startswith("data:"):
                     continue
                 data_text = line.removeprefix("data:").strip()
                 if data_text == "[DONE]":
+                    elapsed_ms = int((perf_counter() - started_at) * 1000)
+                    print(f"[ai] stream done marker received in {elapsed_ms}ms, chunks={chunk_count}", flush=True)
                     break
                 try:
                     chunk = json.loads(data_text)
@@ -338,16 +360,32 @@ class AIService:
                     delta = choice.get("delta") or {}
                     content = delta.get("content")
                     if content:
+                        if not content_parts:
+                            elapsed_ms = int((perf_counter() - started_at) * 1000)
+                            print(f"[ai] first content chunk received in {elapsed_ms}ms", flush=True)
+                        chunk_count += 1
                         content_parts.append(str(content))
-        return "".join(content_parts).strip()
+                        if chunk_count % 20 == 0:
+                            print(f"[ai] streaming content: chunks={chunk_count}, chars={sum(len(part) for part in content_parts)}", flush=True)
+        content = "".join(content_parts).strip()
+        print(f"[ai] stream closed: chunks={chunk_count}, chars={len(content)}", flush=True)
+        return content
 
     def _raise_for_ai_response(self, response: httpx.Response) -> None:
+        detail = self._response_error_detail(response)
         if response.status_code == 502:
-            raise AIServiceError("AI 服务网关暂时不可用（502），请稍后重试或检查 AI_API_BASE")
+            raise AIServiceError(f"AI 服务网关暂时不可用（502），请稍后重试或检查 AI_API_BASE{detail}")
         if response.status_code >= 500:
-            raise AIServiceError(f"AI 服务暂时不可用（HTTP {response.status_code}），请稍后重试")
+            raise AIServiceError(f"AI 服务暂时不可用（HTTP {response.status_code}），请稍后重试{detail}")
         if response.status_code >= 400:
-            raise AIServiceError(f"AI 请求失败（HTTP {response.status_code}），请检查模型名称、密钥或接口地址")
+            raise AIServiceError(f"AI 请求失败（HTTP {response.status_code}），请检查模型名称、密钥或接口地址{detail}")
+
+    def _response_error_detail(self, response: httpx.Response) -> str:
+        text = response.text.strip()
+        if not text:
+            return ""
+        compact = " ".join(text.split())
+        return f"；接口返回：{compact[:300]}"
 
     def _extract_json(self, text: str) -> dict[str, Any] | None:
         candidates = [text.strip()]

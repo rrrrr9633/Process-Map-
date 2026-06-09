@@ -15,10 +15,10 @@
         </div>
 
         <div class="tabs">
-            <div class="tab active" onclick="switchTab('generate')">生成工序</div>
-            <div class="tab" onclick="switchTab('edit')">编辑工序</div>
-            <div class="tab" onclick="switchTab('cases')">案例库</div>
-            <div class="tab" onclick="switchTab('settings')">配置</div>
+            <div class="tab active" data-tab="generate" onclick="switchTab('generate', this)">生成工序</div>
+            <div class="tab" data-tab="edit" onclick="switchTab('edit', this)">编辑工序</div>
+            <div class="tab" data-tab="cases" onclick="switchTab('cases', this)">案例库</div>
+            <div class="tab" data-tab="settings" onclick="switchTab('settings', this)">配置</div>
         </div>
 
         <!-- Tab 1: 生成工序 -->
@@ -80,7 +80,7 @@
                             </select>
                         </div>
                         <div class="form-col">
-                            <label><input type="checkbox" id="use-ai-enhancement"> 启用AI增强（需配置）</label>
+                            <label class="ai-enhancement-toggle"><input type="checkbox" id="use-ai-enhancement"> <span>启用 AI 增强（需配置）</span></label>
                         </div>
                     </div>
                 </div>

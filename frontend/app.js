@@ -5,6 +5,7 @@ const API_BASE = 'http://localhost:8000';
 let currentData = null;
 let currentCaseId = null;
 let isGeneratingProcess = false;
+let generationProgressTimer = null;
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -15,11 +16,14 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // Tab切换
-function switchTab(tabName) {
+function switchTab(tabName, targetElement) {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     
-    event.target.classList.add('active');
+    const activeTab = targetElement || document.querySelector(`.tab[data-tab="${tabName}"]`);
+    if (activeTab) {
+        activeTab.classList.add('active');
+    }
     document.getElementById(tabName + '-tab').classList.add('active');
     
     // 加载对应数据
@@ -166,7 +170,143 @@ async function loadConfigStatus() {
     }
 }
 
+function renderGenerationProgress(stage, detail, startedAt, extraItems = [], activeKey = 'backend') {
+    const elapsedSeconds = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0;
+    const items = [
+        { key: 'request', label: '前端请求', value: '已准备生成参数并发起请求' },
+        { key: 'upload', label: '文件上传', value: '正在把图纸文件发送到后端' },
+        { key: 'backend', label: '后端预处理', value: '复用或保存文件，快速生成本地兜底数据' },
+        { key: 'ai-prepare', label: 'AI 准备请求', value: '整理图纸图像、兜底方案和模型参数' },
+        { key: 'ai-connect', label: 'AI 连接模型', value: '请求已发出，等待模型建立响应或首段内容' },
+        { key: 'ai-generate', label: 'AI 生成内容', value: '模型正在生成结构化工序、流程图和确认项' },
+        { key: 'ai-timeout', label: 'AI 超时边界', value: '等待模型返回；失败后后端会兜底' },
+        { key: 'result', label: '结果返回', value: '等待工序方案、流程图、Agent 链路和人工确认项返回前端' },
+        ...extraItems,
+    ];
+    return `
+        <div class="progress-panel">
+            <div class="progress-panel-header">
+                <strong>${escapeHtml(stage)}</strong>
+                <span>已等待 ${elapsedSeconds} 秒</span>
+            </div>
+            <div class="progress-current"><span class="progress-inline-spinner"></span>${escapeHtml(detail)}</div>
+            <div class="progress-steps">
+                ${items.map(item => `
+                    <div class="progress-step ${item.key === activeKey ? 'active' : ''}">
+                        <strong>${item.key === activeKey ? '<span class="progress-step-spinner"></span>' : ''}${escapeHtml(item.label)}</strong>
+                        <span>${escapeHtml(item.value)}</span>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function setGenerationProgress(stage, detail, startedAt, extraItems = [], activeKey = 'backend') {
+    const loading = document.getElementById('generate-loading');
+    if (!loading) return;
+    loading.innerHTML = renderGenerationProgress(stage, detail, startedAt, extraItems, activeKey);
+    loading.classList.add('active');
+}
+
+function stopGenerationProgressTimer() {
+    if (generationProgressTimer) {
+        clearInterval(generationProgressTimer);
+        generationProgressTimer = null;
+    }
+}
+
+function startGenerationProgressTimer(stage, detail, startedAt, extraItems = [], activeKey = 'backend') {
+    stopGenerationProgressTimer();
+    setGenerationProgress(stage, detail, startedAt, extraItems, activeKey);
+    generationProgressTimer = setInterval(() => {
+        setGenerationProgress(stage, detail, startedAt, extraItems, activeKey);
+    }, 1000);
+}
+
+function getAiWaitStage(elapsedSeconds) {
+    if (elapsedSeconds < 8) {
+        return {
+            stage: 'AI 准备请求',
+            detail: '后端正在整理图纸图片、工序兜底方案和模型请求参数。',
+            activeKey: 'ai-prepare',
+        };
+    }
+    if (elapsedSeconds < 20) {
+        return {
+            stage: 'AI 连接模型',
+            detail: '后端正在连接 AI 接口并等待模型开始返回内容；如果终端没有 first content，通常卡在网络或模型排队。',
+            activeKey: 'ai-connect',
+        };
+    }
+    if (elapsedSeconds < 45) {
+        return {
+            stage: 'AI 生成结构化方案',
+            detail: '模型正在生成图纸理解、工序拆分、流程图和人工确认项；终端会显示 chunk 和字符数增长。',
+            activeKey: 'ai-generate',
+        };
+    }
+    return {
+        stage: 'AI 等待超时边界',
+        detail: 'AI 已等待较久；如果终端没有持续 chunks，优先检查模型接口、网关或超时配置。失败后后端会回退到本地兜底结果。',
+        activeKey: 'ai-timeout',
+    };
+}
+
+function startAiProgressTimer(startedAt, extraItems = []) {
+    stopGenerationProgressTimer();
+    const render = () => {
+        const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+        const stage = getAiWaitStage(elapsedSeconds);
+        setGenerationProgress(stage.stage, stage.detail, startedAt, extraItems, stage.activeKey);
+    };
+    render();
+    generationProgressTimer = setInterval(render, 1000);
+}
+
+function requestWithUploadProgress(url, formData, startedAt, uploadInfo) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        xhr.upload.onprogress = event => {
+            if (!event.lengthComputable) return;
+            const percent = Math.round((event.loaded / event.total) * 100);
+            startGenerationProgressTimer(
+                '正在上传图纸文件',
+                `文件正在传输到后端：${percent}%（${formatFileSize(event.loaded)} / ${formatFileSize(event.total)}）`,
+                startedAt,
+                [
+                    { key: 'upload-files', label: '上传文件', value: uploadInfo.name },
+                    { key: 'upload-size', label: '总大小', value: formatFileSize(uploadInfo.size) },
+                ],
+                'upload',
+            );
+        };
+        xhr.upload.onload = () => {
+            startAiProgressTimer(
+                startedAt,
+                [
+                    { key: 'upload-files', label: '上传文件', value: uploadInfo.name },
+                    { key: 'upload-size', label: '总大小', value: formatFileSize(uploadInfo.size) },
+                ],
+            );
+        };
+        xhr.onload = () => {
+            resolve({
+                ok: xhr.status >= 200 && xhr.status < 300,
+                status: xhr.status,
+                text: async () => xhr.responseText,
+                json: async () => JSON.parse(xhr.responseText),
+            });
+        };
+        xhr.onerror = () => reject(new Error('网络错误：文件上传或后端连接失败'));
+        xhr.ontimeout = () => reject(new Error('请求超时：后端处理时间过长'));
+        xhr.send(formData);
+    });
+}
+
 function resetGenerateButton(loading, generateButton) {
+    stopGenerationProgressTimer();
     loading.classList.remove('active');
     isGeneratingProcess = false;
     if (generateButton) {
@@ -190,9 +330,16 @@ async function generateProcess() {
     const loading = document.getElementById('generate-loading');
     const result = document.getElementById('generate-result');
     const generateButton = document.getElementById('generate-process-btn');
+    const startedAt = Date.now();
     
-    loading.classList.add('active');
     result.classList.remove('active');
+    startGenerationProgressTimer(
+        '准备生成工序',
+        `输入方式：${method}；工序模式：${mode}；AI增强：${useAI ? '开启' : '关闭'}`,
+        startedAt,
+        [],
+        'request',
+    );
     if (generateButton) {
         generateButton.disabled = true;
         generateButton.textContent = '生成中...';
@@ -217,6 +364,7 @@ async function generateProcess() {
         }
     }
     
+    let keepProgressVisible = false;
     try {
         let response;
         let uploadInfo = null;
@@ -229,6 +377,13 @@ async function generateProcess() {
                 return;
             }
             requestData.text = text;
+            startGenerationProgressTimer(
+                '后端接口已调用',
+                '正在发送文本到 /process/generate-from-text，后端将解析文字、生成工序并尝试 AI 分析。',
+                startedAt,
+                [],
+                'backend',
+            );
             response = await fetch(`${API_BASE}/process/generate-from-text`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -262,10 +417,22 @@ async function generateProcess() {
                     : getUploadSupportNote(getFileSuffix(files[0].name))
             };
             const endpoint = files.length > 1 ? '/process/upload-batch' : '/process/upload';
-            response = await fetch(`${API_BASE}${endpoint}?mode=${mode}&use_ai_enhancement=${useAI}`, {
-                method: 'POST',
-                body: formData
-            });
+            startGenerationProgressTimer(
+                '后端接口已调用',
+                `正在发送 ${files.length} 个文件到 ${endpoint}。上传完成后会复用或保存文件，并进入 AI 分析等待模型返回。`,
+                startedAt,
+                [
+                    { label: '上传文件', value: files.map(file => file.name).join('、') },
+                    { label: '总大小', value: formatFileSize(uploadInfo.size) },
+                ],
+                'upload',
+            );
+            response = await requestWithUploadProgress(
+                `${API_BASE}${endpoint}?mode=${mode}&use_ai_enhancement=${useAI}`,
+                formData,
+                startedAt,
+                uploadInfo,
+            );
         } else if (method === 'json') {
             const jsonText = document.getElementById('json-input').value.trim();
             if (!jsonText) {
@@ -280,6 +447,13 @@ async function generateProcess() {
                 alert('JSON 格式错误：' + e.message);
                 return;
             }
+            startGenerationProgressTimer(
+                '后端接口已调用',
+                '正在发送结构化解析结果到 /process/generate-from-parse。后端将基于 JSON 生成工序、校验流程并返回流程图。',
+                startedAt,
+                [],
+                'backend',
+            );
             response = await fetch(`${API_BASE}/process/generate-from-parse`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -292,19 +466,87 @@ async function generateProcess() {
             throw new Error(`HTTP ${response.status}: ${errorText}`);
         }
         
+        setGenerationProgress(
+            '后端已响应，正在读取结果',
+            '接口已经返回，前端正在解析工序方案、Agent 链路、流程图和人工确认项。',
+            startedAt,
+            [],
+            'result',
+        );
         const data = await response.json();
         if (uploadInfo) {
             data.upload_info = uploadInfo;
         }
         currentData = data;
+        setGenerationProgress(
+            '生成完成，正在渲染结果',
+            `后端返回 ${data.process_plan?.operations?.length || 0} 道工序；AI：${data.agent_trace?.used_ai ? '已使用' : '未使用/已兜底'}。`,
+            startedAt,
+            [],
+            'result',
+        );
         displayResult(data);
         
     } catch (error) {
+        keepProgressVisible = true;
+        stopGenerationProgressTimer();
+        setGenerationProgress(
+            '生成失败',
+            error.message,
+            startedAt,
+            [
+                { key: 'suggestion', label: '处理建议', value: '查看后端终端日志和页面人工确认项；如果是 AI 401/502，优先检查密钥、模型名、接口地址和后端是否重启。' },
+            ],
+            'result',
+        );
         alert('生成失败：' + error.message);
         console.error(error);
     } finally {
-        resetGenerateButton(loading, generateButton);
+        if (keepProgressVisible) {
+            stopGenerationProgressTimer();
+            isGeneratingProcess = false;
+            if (generateButton) {
+                generateButton.disabled = false;
+                generateButton.textContent = '生成工序方案';
+            }
+        } else {
+            resetGenerateButton(loading, generateButton);
+        }
     }
+}
+
+function renderReadableFlow(operations = []) {
+    if (!operations.length) {
+        return '<div class="info">暂无可展示的工序流程</div>';
+    }
+
+    return `
+        <div class="readable-flow">
+            ${operations.map((op, index) => `
+                <div class="flow-step-card">
+                    <div class="flow-step-index">${index + 1}</div>
+                    <div class="flow-step-body">
+                        <div class="flow-step-header">
+                            <span class="operation-no">${escapeHtml(op.operation_no || String(index + 1))}</span>
+                            <strong>${escapeHtml(op.operation_name || '未命名工序')}</strong>
+                        </div>
+                        <p>${escapeHtml(op.content || '暂无工序说明')}</p>
+                        <div class="flow-step-meta">
+                            ${(op.targets || []).slice(0, 3).map(item => `<span>对象：${escapeHtml(item)}</span>`).join('')}
+                            ${(op.equipment || []).slice(0, 2).map(item => `<span>设备：${escapeHtml(item)}</span>`).join('')}
+                            ${(op.inspection_items || []).slice(0, 2).map(item => `<span>检验：${escapeHtml(item)}</span>`).join('')}
+                        </div>
+                        ${op.control_points && op.control_points.length ? `
+                            <div class="flow-step-points">
+                                <strong>关键控制：</strong>${op.control_points.slice(0, 3).map(escapeHtml).join('；')}
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+                ${index < operations.length - 1 ? '<div class="flow-step-arrow">↓</div>' : ''}
+            `).join('')}
+        </div>
+    `;
 }
 
 // 显示结果
@@ -510,10 +752,17 @@ function displayResult(data) {
     
     html += '</div>';
     
-    // 流程图
+    // 可读流程
     html += '<div class="result-section">';
-    html += `<h3>${data.flow.title}</h3>`;
+    html += `<h3>${escapeHtml(data.flow.title || '流程图')}</h3>`;
+    html += '<p class="flow-readable-hint">默认展示按工序顺序展开的人话版流程；原始 Mermaid 技术图保留在下方，可横向滚动查看。</p>';
+    html += renderReadableFlow(data.process_plan.operations || []);
+    html += '<details class="technical-flow-details">';
+    html += '<summary>查看原始技术流程图</summary>';
+    html += '<div class="mermaid-scroll">';
     html += `<div class="mermaid-diagram" id="mermaid-diagram">${data.flow.mermaid}</div>`;
+    html += '</div>';
+    html += '</details>';
     html += '</div>';
     
     // 操作按钮

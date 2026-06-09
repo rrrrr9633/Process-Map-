@@ -92,11 +92,14 @@ class DrawingParser:
         )
 
     def _extract_pdf_text(self, path: Path) -> str:
-        reader = PdfReader(str(path))
-        page_texts = [page.extract_text() or "" for page in reader.pages]
-        return "\n".join(page_texts)
+        try:
+            reader = PdfReader(str(path), strict=False)
+            page_texts = [page.extract_text() or "" for page in reader.pages[:3]]
+            return "\n".join(page_texts)
+        except Exception:
+            return ""
 
-    def extract_pdf_page_images(self, path: str | Path, max_images: int = 6, zoom: float = 2.0) -> list[dict[str, str]]:
+    def extract_pdf_page_images(self, path: str | Path, max_images: int = 1, zoom: float = 1.0) -> list[dict[str, str]]:
         try:
             import fitz
         except Exception:
