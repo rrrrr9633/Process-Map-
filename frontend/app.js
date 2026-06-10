@@ -465,10 +465,17 @@ async function pollProcessJob(jobId, startedAt, uploadInfo) {
         lastJob = job;
         const isFailed = job.status === 'failed' || job.stage === 'failed';
         const aiPreview = String(job.ai_stream_preview || '').trim();
+        const aiStreamItem = aiPreview
+            ? {
+                key: 'ai-stream',
+                label: job.ai_stream_chunks ? `AI 实时输出（${job.ai_stream_chunks} 段）` : 'AI 实时状态',
+                value: aiPreview,
+            }
+            : null;
         const jobDetail = isFailed
             ? `失败原因：${job.error || job.message || '任务失败'}；已生成图解 ${job.explanations?.length || 0} 份，未生成可用工序结果。`
             : aiPreview
-                ? `阶段：${job.stage}；进度：${job.progress || 0}%；AI 已接收 ${job.ai_stream_chunks || 0} 段内容：${aiPreview}`
+                ? `阶段：${job.stage}；进度：${job.progress || 0}%；${job.ai_stream_chunks ? '正在接收 AI 输出' : '正在等待 AI 首段返回'}。`
                 : `阶段：${job.stage}；进度：${job.progress || 0}%；已生成图解 ${job.explanations?.length || 0} 份。`;
         setGenerationProgress(
             job.message || (isFailed ? '任务失败' : '任务处理中'),
@@ -478,7 +485,8 @@ async function pollProcessJob(jobId, startedAt, uploadInfo) {
                 { key: 'job-id', label: '任务 ID', value: job.job_id },
                 { key: 'upload-files', label: '上传文件', value: uploadInfo.name },
                 { key: 'upload-size', label: '总大小', value: formatFileSize(uploadInfo.size) },
-            ],
+                aiStreamItem,
+            ].filter(Boolean),
             getProcessJobActiveKey(job),
         );
         if (job.status === 'completed') return job;

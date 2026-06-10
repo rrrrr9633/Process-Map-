@@ -229,6 +229,8 @@ async def _run_process_job(job_id: str, file_paths: list[str], mode: ProcessMode
             status="running",
             progress=10,
             message=f"已同时启动 {total} 份图纸识别，等待 AI 返回",
+            ai_stream_preview="AI 图解请求已发出，正在等待模型返回第一段内容",
+            ai_stream_chunks=0,
         )
 
         while pending:
@@ -267,7 +269,15 @@ async def _run_process_job(job_id: str, file_paths: list[str], mode: ProcessMode
                 explanation.bubble_asset.export_csv_url = f"exports/{csv_path.name}"
         job_service.set_explanations(job_id, explanations)
 
-        job_service.update(job_id, stage="flow_generating", status="running", progress=75, message=f"正在基于 {total} 份图纸汇总生成工艺流程")
+        job_service.update(
+            job_id,
+            stage="flow_generating",
+            status="running",
+            progress=75,
+            message=f"正在基于 {total} 份图纸汇总生成工艺流程",
+            ai_stream_preview="AI 工艺流程请求已发出，正在等待模型返回第一段内容",
+            ai_stream_chunks=0,
+        )
 
         def on_flow_stream_delta(delta: str, chunk_count: int, content: str) -> None:
             progress = min(95, 75 + chunk_count // 8)
