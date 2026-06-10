@@ -140,7 +140,8 @@ class AIService:
         result = await self._chat_completion(payload, on_stream_delta=on_stream_delta)
         parsed = self._extract_json(result)
         if not parsed:
-            raise AIServiceError(f"AI Agent 返回了非结构化结果：{result.strip()}")
+            preview = result.strip().replace("\n", " ")[:300]
+            raise AIServiceError(f"AI Agent JSON 未完整返回或无法解析，已截断预览：{preview}")
         return parsed
 
     async def explain_single_drawing_page(
@@ -160,11 +161,34 @@ class AIService:
             raise AIServiceError("AI Agent 未启用：未配置 AI_API_KEY")
 
         output_schema = {
-            "visual_summary": "这张图纸主要表达的零件、加工步骤或检验内容",
-            "detected_features": ["识别到的结构、加工对象、关键区域"],
-            "related_operations": ["建议对应的工序名称或编号"],
-            "risk_notes": ["需要人工确认的疑点"],
-            "annotation_result": self._agent_output_schema()["annotation_result"],
+            "visual_summary": "这张图纸主要表达的零件、加工步骤或检验内容，80字以内",
+            "detected_features": ["最多5个关键结构、加工对象、关键区域"],
+            "related_operations": ["最多3个建议对应的工序名称或编号"],
+            "risk_notes": ["最多3个需要人工确认的疑点"],
+            "annotation_result": {
+                "annotations": [
+                    {
+                        "annotation_id": "A001",
+                        "label": "标注短名",
+                        "region": {"page": 1, "x": 0.1, "y": 0.2, "width": 0.08, "height": 0.04, "unit": "ratio"},
+                        "raw_text": "图纸原始标注内容",
+                        "normalized_text": "归一化标注内容",
+                        "parameter_name": "参数名",
+                        "parameter_value": "参数值",
+                        "upper_limit": "上限",
+                        "lower_limit": "下限",
+                        "unit": "单位",
+                        "semantic_type": "dimension|tolerance|roughness|datum|geometric_tolerance|material|process_note|inspection_note|quality_note|unknown",
+                        "source": "pdf_page_image|pdf_embedded_image|pdf_text|agent_reasoning",
+                        "confidence": 0.8,
+                        "review_status": "pending|accepted|rejected|needs_manual_review",
+                        "review_reason": "20字以内审核原因",
+                    }
+                ],
+                "export_rows": [],
+                "bubble_diagram_available": False,
+                "review_required_count": 0,
+            },
         }
         user_content: list[dict[str, Any]] = [
             {
@@ -182,8 +206,10 @@ class AIService:
                         "output_schema": output_schema,
                         "rules": [
                             "只返回 JSON，不要返回 Markdown。",
-                            "visual_summary 必须用工人能理解的话说明这张图在表达什么。",
-                            "annotations 中 region 坐标使用 unit=ratio；若提供了 view_region 则相对当前视图裁剪图 0~1，否则相对整页 0~1；无法确定坐标时 width/height 置 0 并在 review_reason 说明。",
+                            "visual_summary 必须用工人能理解的话说明这张图在表达什么，控制在80字以内。",
+                            "detected_features 最多 5 项，related_operations 最多 3 项，risk_notes 最多 3 项。",
+                            "annotations 最多 6 项，只保留当前视图中最关键、最清晰、最影响工艺的标注；不要把 OCR 中未定位的所有尺寸都展开成 annotations。",
+                            "annotations 中 region 坐标使用 unit=ratio；若提供了 view_region 则相对当前视图裁剪图 0~1，否则相对整页 0~1；无法确定坐标时只在 risk_notes 说明，不要额外创建 annotation。",
                             "结合 ocr_text 校正尺寸和标注，不要与 OCR 明显冲突。",
                             "不要编造具体尺寸、公差或材料；看不清就放入 risk_notes。",
                         ],
@@ -211,10 +237,11 @@ class AIService:
             "temperature": 0.1,
             "response_format": {"type": "json_object"},
         }
-        result = await self._chat_completion(payload, on_stream_delta=on_stream_delta)
+        result = await self._chat_completion(payload, on_stream_delta=on_stream_delta, disable_timeout=True)
         parsed = self._extract_json(result)
         if not parsed:
-            raise AIServiceError(f"AI 单图图解返回了非结构化结果：{result.strip()}")
+            preview = result.strip().replace("\n", " ")[:300]
+            raise AIServiceError(f"AI 单图图解 JSON 未完整返回或无法解析，已截断预览：{preview}")
         return parsed
 
     async def enhance_process_plan(self, process_plan: ProcessPlan, drawing_info: dict[str, Any]) -> tuple[ProcessPlan, list[str]]:
@@ -403,7 +430,13 @@ class AIService:
             "questions": [{"field": "缺失字段", "question": "需要用户确认的问题", "reason": "原因", "severity": "warning"}],
         }
 
-    async def _chat_completion(self, payload: dict[str, Any], on_stream_delta: Any | None = None) -> str:
+    async def _chat_completion(
+        self,
+        payload: dict[str, Any],
+        on_stream_delta: Any | None = None,
+        timeout_seconds: float | None = None,
+        disable_timeout: bool = False,
+    ) -> str:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -411,12 +444,14 @@ class AIService:
         stream_payload = dict(payload)
         stream_payload["stream"] = True
         request_started_at = perf_counter()
+        request_timeout = None if disable_timeout else (timeout_seconds if timeout_seconds is not None else self.timeout_seconds)
+        timeout_label = "disabled" if request_timeout is None else f"{request_timeout}s"
         print(
-            f"[ai] prepare request: provider={self.provider}, model={self.model_name}, timeout={self.timeout_seconds}s, messages={len(payload.get('messages', []))}",
+            f"[ai] prepare request: provider={self.provider}, model={self.model_name}, timeout={timeout_label}, messages={len(payload.get('messages', []))}",
             flush=True,
         )
 
-        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=request_timeout) as client:
             print("[ai] stream request start: json_mode=true", flush=True)
             response = await self._post_stream(client, headers, stream_payload, on_stream_delta=on_stream_delta)
             if response is not None:

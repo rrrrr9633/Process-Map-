@@ -256,6 +256,8 @@ function getGenerationProgressItems(extraItems = []) {
         { key: 'explaining', label: '图纸识别', value: '后端正在逐份逐页生成图解和识别结果' },
         { key: 'bubble_generating', label: '气泡图生成', value: '后端正在生成气泡图和标注导出数据' },
         { key: 'flow_generating', label: '工序方案生成', value: '后端正在基于真实图解结果生成工序方案' },
+        { key: 'annotation_explaining', label: '精细图解标注', value: '快速工序方案已可查看，后端继续逐页生成图解和标注' },
+        { key: 'annotation_bubble_generating', label: '气泡图生成', value: '后端正在生成气泡图和标注导出数据' },
         { key: 'failed', label: '失败处理', value: '后端任务失败后停留在当前页并展示失败原因' },
         { key: 'completed', label: '结果返回', value: '后端任务完成并返回工序方案' },
     ];
@@ -342,6 +344,8 @@ function getProgressRank(activeKey) {
         'explaining',
         'bubble_generating',
         'flow_generating',
+        'annotation_explaining',
+        'annotation_bubble_generating',
         'failed',
         'completed',
         'result',
@@ -465,11 +469,12 @@ async function pollProcessJob(jobId, startedAt, uploadInfo) {
         lastJob = job;
         const isFailed = job.status === 'failed' || job.stage === 'failed';
         const aiPreview = String(job.ai_stream_preview || '').trim();
-        const aiStreamItem = aiPreview
+        const isAiStage = ['explaining', 'flow_generating', 'annotation_explaining'].includes(String(job.stage || '').toLowerCase());
+        const aiStreamItem = aiPreview || isAiStage
             ? {
                 key: 'ai-stream',
                 label: job.ai_stream_chunks ? `AI 实时输出（${job.ai_stream_chunks} 段）` : 'AI 实时状态',
-                value: aiPreview,
+                value: aiPreview || 'AI 请求已进入后端，正在等待模型返回第一段内容。',
             }
             : null;
         const jobDetail = isFailed
@@ -489,6 +494,7 @@ async function pollProcessJob(jobId, startedAt, uploadInfo) {
             ].filter(Boolean),
             getProcessJobActiveKey(job),
         );
+        if (job.process_result) return job;
         if (job.status === 'completed') return job;
         if (job.status === 'failed') throw new Error(job.error || job.message || '任务失败');
         await new Promise(resolve => setTimeout(resolve, 1000));

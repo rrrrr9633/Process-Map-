@@ -88,8 +88,6 @@ class ProcessAgent:
             print(f"[process] batch local step {index}/{len(file_paths)} start: {path.name}", flush=True)
             parse_result = self.parser.parse_file(path)
             parse_results.append(parse_result)
-            if not explanations:
-                image_payloads.extend(self._extract_images(path, trace))
             elapsed_ms = int((perf_counter() - started_at) * 1000)
             print(f"[process] batch local step {index}/{len(file_paths)} done in {elapsed_ms}ms: {path.name}", flush=True)
             trace.stages.append(f"完成第 {index} 份图纸本地解析：{path.name}")

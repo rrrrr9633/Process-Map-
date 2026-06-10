@@ -15,6 +15,8 @@ JobStage = Literal[
     "explaining",
     "bubble_generating",
     "flow_generating",
+    "annotation_explaining",
+    "annotation_bubble_generating",
     "completed",
     "failed",
 ]

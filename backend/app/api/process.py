@@ -189,16 +189,62 @@ async def _explain_process_job_file(
 async def _run_process_job(job_id: str, file_paths: list[str], mode: ProcessMode) -> None:
     try:
         total = max(1, len(file_paths))
-        job_service.update(job_id, stage="rendering", status="running", progress=5, message=f"开始渲染并识别 {total} 份图纸")
+        job_service.update(
+            job_id,
+            stage="flow_generating",
+            status="running",
+            progress=10,
+            message=f"快速层：正在基于 {total} 份图纸生成工艺流程",
+            ai_stream_preview="AI 快速工艺流程请求已发出，正在等待模型返回第一段内容",
+            ai_stream_chunks=0,
+        )
 
-        def on_explanation_stream_delta(file_index: int, delta: str, chunk_count: int, content: str) -> None:
-            progress = min(55, 10 + chunk_count // 10)
+        def on_flow_stream_delta(delta: str, chunk_count: int, content: str) -> None:
+            progress = min(65, 10 + chunk_count // 6)
             job_service.update(
                 job_id,
-                stage="explaining",
+                stage="flow_generating",
                 status="running",
                 progress=progress,
-                message=f"第 {file_index} 份图纸 AI 图解中，已接收 {chunk_count} 段内容",
+                message=f"快速层：AI 正在生成工艺流程，已接收 {chunk_count} 段内容",
+                ai_stream_preview=content,
+                ai_stream_chunks=chunk_count,
+            )
+
+        agent_response = await process_agent.run_from_files(
+            file_paths,
+            mode,
+            explanations=None,
+            on_stream_delta=on_flow_stream_delta,
+        )
+        result = ProcessGenerationResponse(
+            parse_result=agent_response.parse_result,
+            annotation_result=agent_response.annotation_result,
+            process_plan=agent_response.process_plan,
+            flow=agent_response.flow,
+            similar_cases=agent_response.similar_cases,
+            ai_suggestions=agent_response.ai_suggestions,
+            agent_trace=agent_response.agent_trace,
+        )
+        job_service.set_process_result(job_id, result.model_dump(mode="json"))
+        job_service.update(
+            job_id,
+            stage="annotation_explaining",
+            status="running",
+            progress=70,
+            message="快速工序方案已生成，正在后台执行精细图解和标注",
+            ai_stream_preview="快速层结果已可查看；精细标注层会继续在后台运行，不阻塞工序方案。",
+            ai_stream_chunks=0,
+        )
+
+        def on_explanation_stream_delta(file_index: int, delta: str, chunk_count: int, content: str) -> None:
+            progress = min(90, 70 + chunk_count // 20)
+            job_service.update(
+                job_id,
+                stage="annotation_explaining",
+                status="running",
+                progress=progress,
+                message=f"精细标注层：第 {file_index} 份图纸 AI 图解中，已接收 {chunk_count} 段内容",
                 ai_stream_preview=content,
                 ai_stream_chunks=chunk_count,
             )
@@ -223,16 +269,6 @@ async def _run_process_job(job_id: str, file_paths: list[str], mode: ProcessMode
         explanations_by_index: dict[int, DrawingExplanation] = {}
         completed = 0
 
-        job_service.update(
-            job_id,
-            stage="explaining",
-            status="running",
-            progress=10,
-            message=f"已同时启动 {total} 份图纸识别，等待 AI 返回",
-            ai_stream_preview="AI 图解请求已发出，正在等待模型返回第一段内容",
-            ai_stream_chunks=0,
-        )
-
         while pending:
             done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
@@ -243,17 +279,17 @@ async def _run_process_job(job_id: str, file_paths: list[str], mode: ProcessMode
                 job_service.set_explanations(job_id, explanations)
                 job_service.update(
                     job_id,
-                    stage="explaining",
+                    stage="annotation_explaining",
                     status="running",
-                    progress=10 + int(completed / total * 45),
-                    message=f"已完成 {completed}/{total} 份图纸识别",
+                    progress=70 + int(completed / total * 15),
+                    message=f"精细标注层：已完成 {completed}/{total} 份图纸识别",
                 )
 
         explanations = [explanations_by_index[index] for index in sorted(explanations_by_index)]
         if len(explanations) != len(file_paths):
             raise RuntimeError(f"图纸识别数量不一致：期望 {len(file_paths)}，实际 {len(explanations)}")
 
-        job_service.update(job_id, stage="bubble_generating", status="running", progress=60, message="正在生成气泡图")
+        job_service.update(job_id, stage="annotation_bubble_generating", status="running", progress=90, message="精细标注层：正在生成气泡图和导出数据")
         explanations = [
             bubble_diagram_service.generate(explanation, job_service.bubbles_dir(job_id))
             for explanation in explanations
@@ -268,50 +304,22 @@ async def _run_process_job(job_id: str, file_paths: list[str], mode: ProcessMode
                 explanation.bubble_asset.export_csv_path = str(csv_path)
                 explanation.bubble_asset.export_csv_url = f"exports/{csv_path.name}"
         job_service.set_explanations(job_id, explanations)
-
-        job_service.update(
-            job_id,
-            stage="flow_generating",
-            status="running",
-            progress=75,
-            message=f"正在基于 {total} 份图纸汇总生成工艺流程",
-            ai_stream_preview="AI 工艺流程请求已发出，正在等待模型返回第一段内容",
-            ai_stream_chunks=0,
-        )
-
-        def on_flow_stream_delta(delta: str, chunk_count: int, content: str) -> None:
-            progress = min(95, 75 + chunk_count // 8)
-            job_service.update(
-                job_id,
-                stage="flow_generating",
-                status="running",
-                progress=progress,
-                message=f"AI 正在生成工艺流程，已接收 {chunk_count} 段内容",
-                ai_stream_preview=content,
-                ai_stream_chunks=chunk_count,
-            )
-
-        agent_response = await process_agent.run_from_files(
-            file_paths,
-            mode,
-            explanations=explanations,
-            on_stream_delta=on_flow_stream_delta,
-        )
-        result = ProcessGenerationResponse(
-            parse_result=agent_response.parse_result,
-            annotation_result=agent_response.annotation_result,
-            process_plan=agent_response.process_plan,
-            flow=agent_response.flow,
-            similar_cases=agent_response.similar_cases,
-            ai_suggestions=agent_response.ai_suggestions,
-            agent_trace=agent_response.agent_trace,
-        )
-        job_service.set_process_result(job_id, result.model_dump(mode="json"))
         job_service.complete(job_id)
     except Exception as exc:
         for task in locals().get("pending", set()):
             task.cancel()
-        job_service.fail(job_id, f"{type(exc).__name__}: {exc}")
+        existing_job = job_service.get(job_id)
+        if existing_job.process_result:
+            job_service.update(
+                job_id,
+                stage="failed",
+                status="completed",
+                progress=100,
+                message="快速工序方案已生成，精细标注层失败",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        else:
+            job_service.fail(job_id, f"{type(exc).__name__}: {exc}")
 
 
 @router.post("/jobs/from-stored", response_model=ProcessJob)
