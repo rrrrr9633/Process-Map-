@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -31,7 +32,10 @@ class JobService:
     def save(self, job: ProcessJob) -> ProcessJob:
         job.updated_at = datetime.utcnow().isoformat()
         self.job_dir(job.job_id).mkdir(parents=True, exist_ok=True)
-        self.job_path(job.job_id).write_text(job.model_dump_json(indent=2), encoding="utf-8")
+        path = self.job_path(job.job_id)
+        temp_path = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
+        temp_path.write_text(job.model_dump_json(indent=2), encoding="utf-8")
+        os.replace(temp_path, path)
         return job
 
     def update(

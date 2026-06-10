@@ -448,12 +448,31 @@ function getProcessJobActiveKey(job) {
 }
 
 async function pollProcessJob(jobId, startedAt, uploadInfo) {
+    let statusReadFailures = 0;
     while (true) {
         const response = await fetch(`${API_BASE}/process/jobs/${jobId}`);
         if (!response.ok) {
             const errorText = await response.text();
+            statusReadFailures += 1;
+            if (response.status >= 500 && statusReadFailures <= 8) {
+                setGenerationProgress(
+                    '任务仍在运行，正在重试状态读取',
+                    `状态接口临时返回 HTTP ${response.status}，已重试 ${statusReadFailures}/8 次。`,
+                    startedAt,
+                    [
+                        { key: 'job-id', label: '任务 ID', value: jobId },
+                        { key: 'upload-files', label: '上传文件', value: uploadInfo.name },
+                        { key: 'upload-size', label: '总大小', value: formatFileSize(uploadInfo.size) },
+                        { key: 'status-error', label: '状态读取', value: errorText || `HTTP ${response.status}` },
+                    ],
+                    'backend',
+                );
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                continue;
+            }
             throw new Error(`任务状态读取失败 HTTP ${response.status}: ${errorText}`);
         }
+        statusReadFailures = 0;
         const job = await response.json();
         lastJob = job;
         const isFailed = job.status === 'failed' || job.stage === 'failed';
