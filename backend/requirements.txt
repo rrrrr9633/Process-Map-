@@ -11,3 +11,5 @@ python-dotenv
 httpx
 ezdxf
 matplotlib
+SQLAlchemy
+PyMySQL

@@ -10,12 +10,19 @@ from fastapi.staticfiles import StaticFiles
 from app.api.cases import router as cases_router
 from app.api.process import router as process_router
 from app.config import settings
+from app.db import init_db
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = BASE_DIR / "frontend"
 INDEX_V2_PATH = FRONTEND_DIR / "index_v2.html"
 
 app = FastAPI(title="曲轴工序拆分系统", version="0.2.0")
+
+
+@app.on_event("startup")
+def startup() -> None:
+    init_db()
+
 
 # CORS：生产环境从 ALLOWED_ORIGINS 读取，默认包含 tianxiadiyi.xyz 与服务器 IP。
 allowed_origins = settings.cors_origins

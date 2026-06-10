@@ -4,23 +4,14 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.models.drawing import DrawingParseResult
-from app.models.drawing_explanation import AnnotationUpdateRequest, DrawingExplanation, ProcessJob
+from app.models.drawing_explanation import DrawingExplanation, ProcessJob
 from app.models.process import ProcessMode, ProcessPlan
 from app.schemas.process import EditedPlanRequest, GenerateFromParseRequest, GenerateFromTextRequest, ProcessGenerationResponse
 from app.services.ai_service import AIServiceError, ai_service
-from app.services.bubble_diagram_service import bubble_diagram_service
 from app.services.case_service import case_service
-from app.services.drawing_explanation_service import drawing_explanation_service
-from app.services.annotation_normalizer import (
-    convert_annotation_region_to_ratio,
-    merge_annotation_results,
-    normalize_annotation,
-    rebuild_export_rows,
-)
 from app.services.drawing_parser import DrawingParser
 from app.services.export_service import ExportService
 from app.services.flow_builder import FlowBuilder
@@ -133,30 +124,10 @@ async def _run_sync_explanation_pipeline(
     file_paths: list[str],
     mode: ProcessMode,
 ) -> tuple[str, list[DrawingExplanation], ProcessGenerationResponse]:
-    """同步接口：逐份逐页图解 + 气泡图 + 合并工艺流程（与 Job 批量主链一致）。"""
+    """同步兼容接口：只生成快速工序层；精细图解、气泡图和标注全部移入案例后台。"""
     job = job_service.create_job(file_paths)
     job_id = job.job_id
-    explanations: list[DrawingExplanation] = []
-    for index, file_path in enumerate(file_paths, start=1):
-        explanation = await drawing_explanation_service.explain_file(
-            file_path,
-            job_service.pages_dir(job_id),
-            index,
-        )
-        explanation = bubble_diagram_service.generate(explanation, job_service.bubbles_dir(job_id))
-        explanations.append(explanation)
-    csv_path, _ = export_service.export_annotations(explanations, job_service.exports_dir(job_id))
-    for explanation in explanations:
-        for page_explanation in explanation.page_explanations:
-            if page_explanation.bubble_asset:
-                page_explanation.bubble_asset.export_csv_path = str(csv_path)
-                page_explanation.bubble_asset.export_csv_url = f"exports/{csv_path.name}"
-        if explanation.bubble_asset:
-            explanation.bubble_asset.export_csv_path = str(csv_path)
-            explanation.bubble_asset.export_csv_url = f"exports/{csv_path.name}"
-    job_service.set_explanations(job_id, explanations)
-
-    agent_response = await process_agent.run_from_files(file_paths, mode, explanations=explanations)
+    agent_response = await process_agent.run_from_files(file_paths, mode, explanations=None)
     result = ProcessGenerationResponse(
         parse_result=agent_response.parse_result,
         annotation_result=agent_response.annotation_result,
@@ -166,25 +137,11 @@ async def _run_sync_explanation_pipeline(
         ai_suggestions=agent_response.ai_suggestions,
         agent_trace=agent_response.agent_trace,
         job_id=job_id,
-        explanations=explanations,
+        explanations=[],
     )
     job_service.set_process_result(job_id, result.model_dump(mode="json"))
     job_service.complete(job_id)
-    return job_id, explanations, result
-
-async def _explain_process_job_file(
-    job_id: str,
-    file_path: str,
-    file_index: int,
-    on_stream_delta=None,
-) -> DrawingExplanation:
-    return await drawing_explanation_service.explain_file(
-        file_path,
-        job_service.pages_dir(job_id),
-        file_index,
-        on_stream_delta=on_stream_delta,
-    )
-
+    return job_id, [], result
 
 async def _run_process_job(job_id: str, file_paths: list[str], mode: ProcessMode) -> None:
     try:
@@ -200,7 +157,7 @@ async def _run_process_job(job_id: str, file_paths: list[str], mode: ProcessMode
         )
 
         def on_flow_stream_delta(delta: str, chunk_count: int, content: str) -> None:
-            progress = min(65, 10 + chunk_count // 6)
+            progress = min(95, 10 + chunk_count // 6)
             job_service.update(
                 job_id,
                 stage="flow_generating",
@@ -227,99 +184,9 @@ async def _run_process_job(job_id: str, file_paths: list[str], mode: ProcessMode
             agent_trace=agent_response.agent_trace,
         )
         job_service.set_process_result(job_id, result.model_dump(mode="json"))
-        job_service.update(
-            job_id,
-            stage="annotation_explaining",
-            status="running",
-            progress=70,
-            message="快速工序方案已生成，正在后台执行精细图解和标注",
-            ai_stream_preview="快速层结果已可查看；精细标注层会继续在后台运行，不阻塞工序方案。",
-            ai_stream_chunks=0,
-        )
-
-        def on_explanation_stream_delta(file_index: int, delta: str, chunk_count: int, content: str) -> None:
-            progress = min(90, 70 + chunk_count // 20)
-            job_service.update(
-                job_id,
-                stage="annotation_explaining",
-                status="running",
-                progress=progress,
-                message=f"精细标注层：第 {file_index} 份图纸 AI 图解中，已接收 {chunk_count} 段内容",
-                ai_stream_preview=content,
-                ai_stream_chunks=chunk_count,
-            )
-
-        tasks = [
-            asyncio.create_task(
-                _explain_process_job_file(
-                    job_id,
-                    file_path,
-                    index,
-                    on_stream_delta=lambda delta, chunk_count, content, file_index=index: on_explanation_stream_delta(
-                        file_index,
-                        delta,
-                        chunk_count,
-                        content,
-                    ),
-                )
-            )
-            for index, file_path in enumerate(file_paths, start=1)
-        ]
-        pending = set(tasks)
-        explanations_by_index: dict[int, DrawingExplanation] = {}
-        completed = 0
-
-        while pending:
-            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-            for task in done:
-                explanation = task.result()
-                explanations_by_index[explanation.file_index] = explanation
-                completed += 1
-                explanations = [explanations_by_index[index] for index in sorted(explanations_by_index)]
-                job_service.set_explanations(job_id, explanations)
-                job_service.update(
-                    job_id,
-                    stage="annotation_explaining",
-                    status="running",
-                    progress=70 + int(completed / total * 15),
-                    message=f"精细标注层：已完成 {completed}/{total} 份图纸识别",
-                )
-
-        explanations = [explanations_by_index[index] for index in sorted(explanations_by_index)]
-        if len(explanations) != len(file_paths):
-            raise RuntimeError(f"图纸识别数量不一致：期望 {len(file_paths)}，实际 {len(explanations)}")
-
-        job_service.update(job_id, stage="annotation_bubble_generating", status="running", progress=90, message="精细标注层：正在生成气泡图和导出数据")
-        explanations = [
-            bubble_diagram_service.generate(explanation, job_service.bubbles_dir(job_id))
-            for explanation in explanations
-        ]
-        csv_path, json_path = export_service.export_annotations(explanations, job_service.exports_dir(job_id))
-        for explanation in explanations:
-            for page_explanation in explanation.page_explanations:
-                if page_explanation.bubble_asset:
-                    page_explanation.bubble_asset.export_csv_path = str(csv_path)
-                    page_explanation.bubble_asset.export_csv_url = f"exports/{csv_path.name}"
-            if explanation.bubble_asset:
-                explanation.bubble_asset.export_csv_path = str(csv_path)
-                explanation.bubble_asset.export_csv_url = f"exports/{csv_path.name}"
-        job_service.set_explanations(job_id, explanations)
         job_service.complete(job_id)
     except Exception as exc:
-        for task in locals().get("pending", set()):
-            task.cancel()
-        existing_job = job_service.get(job_id)
-        if existing_job.process_result:
-            job_service.update(
-                job_id,
-                stage="failed",
-                status="completed",
-                progress=100,
-                message="快速工序方案已生成，精细标注层失败",
-                error=f"{type(exc).__name__}: {exc}",
-            )
-        else:
-            job_service.fail(job_id, f"{type(exc).__name__}: {exc}")
+        job_service.fail(job_id, f"{type(exc).__name__}: {exc}")
 
 
 @router.post("/jobs/from-stored", response_model=ProcessJob)
@@ -363,93 +230,6 @@ def get_process_job(job_id: str) -> ProcessJob:
         return job_service.get(job_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="任务不存在")
-
-
-@router.get("/jobs/{job_id}/assets/{asset_path:path}")
-def get_process_job_asset(job_id: str, asset_path: str) -> FileResponse:
-    try:
-        path = job_service.resolve_asset(job_id, asset_path)
-    except (FileNotFoundError, ValueError):
-        raise HTTPException(status_code=404, detail="资源不存在")
-    if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail="资源不存在")
-    return FileResponse(path)
-
-
-@router.post("/jobs/{job_id}/annotations/{annotation_id}", response_model=ProcessJob)
-def update_job_annotation(job_id: str, annotation_id: str, request: AnnotationUpdateRequest) -> ProcessJob:
-    try:
-        job = job_service.get(job_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="任务不存在")
-
-    updated = False
-    for explanation in job.explanations:
-        for page_explanation in explanation.page_explanations:
-            annotations = page_explanation.annotation_result.annotations
-            for index, annotation in enumerate(annotations):
-                if annotation.annotation_id != annotation_id:
-                    continue
-                candidate = request.annotation
-                asset = page_explanation.page_asset
-                if asset and asset.width and asset.height:
-                    candidate = convert_annotation_region_to_ratio(
-                        candidate, asset.width, asset.height
-                    )
-                normalized = normalize_annotation(
-                    candidate,
-                    page=page_explanation.page,
-                    file_index=explanation.file_index,
-                    index=index + 1,
-                )
-                annotations[index] = normalized
-                updated = True
-            page_explanation.annotation_result.export_rows = rebuild_export_rows(annotations)
-            page_explanation.annotation_result.review_required_count = sum(
-                1
-                for item in annotations
-                if item.review_status in {"pending", "needs_manual_review"}
-            )
-        explanation.annotation_result = merge_annotation_results(
-            [item.annotation_result for item in explanation.page_explanations]
-        )
-    if not updated:
-        raise HTTPException(status_code=404, detail="标注不存在")
-
-    explanations = [
-        bubble_diagram_service.generate(explanation, job_service.bubbles_dir(job_id))
-        for explanation in job.explanations
-    ]
-    csv_path, _ = export_service.export_annotations(explanations, job_service.exports_dir(job_id))
-    for explanation in explanations:
-        for page_explanation in explanation.page_explanations:
-            if page_explanation.bubble_asset:
-                page_explanation.bubble_asset.export_csv_path = str(csv_path)
-                page_explanation.bubble_asset.export_csv_url = f"exports/{csv_path.name}"
-        if explanation.bubble_asset:
-            explanation.bubble_asset.export_csv_path = str(csv_path)
-            explanation.bubble_asset.export_csv_url = f"exports/{csv_path.name}"
-    job.explanations = explanations
-    return job_service.save(job)
-
-
-@router.post("/jobs/{job_id}/bubble/regenerate", response_model=ProcessJob)
-def regenerate_job_bubbles(job_id: str) -> ProcessJob:
-    try:
-        job = job_service.get(job_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="任务不存在")
-    explanations = [
-        bubble_diagram_service.generate(explanation, job_service.bubbles_dir(job_id))
-        for explanation in job.explanations
-    ]
-    csv_path, _ = export_service.export_annotations(explanations, job_service.exports_dir(job_id))
-    for explanation in explanations:
-        if explanation.bubble_asset:
-            explanation.bubble_asset.export_csv_path = str(csv_path)
-            explanation.bubble_asset.export_csv_url = f"exports/{csv_path.name}"
-    job.explanations = explanations
-    return job_service.save(job)
 
 
 @router.post("/generate-from-text", response_model=ProcessGenerationResponse)

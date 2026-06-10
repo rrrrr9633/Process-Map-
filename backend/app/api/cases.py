@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.models.case import CaseQuality, CaseStatus, HumanEdit, ProcessCase
+from app.services.case_annotation_service import case_annotation_service
 from app.services.case_service import case_service, knowledge_base_service
 
 router = APIRouter(prefix="/cases", tags=["cases"])
@@ -43,10 +45,19 @@ class SearchKnowledgeRequest(BaseModel):
 
 
 @router.post("/save")
-def save_case(request: SaveCaseRequest) -> dict:
-    """保存工序案例"""
+def save_case(request: SaveCaseRequest, background_tasks: BackgroundTasks) -> dict:
+    """保存工序案例，并在案例层启动精细标注后台任务。"""
     case_id = case_service.save_case(request.case)
-    return {"case_id": case_id, "message": "案例保存成功"}
+    annotation_job = None
+    try:
+        annotation_job = case_annotation_service.start_job(case_id)
+        background_tasks.add_task(case_annotation_service.run_job, case_id, annotation_job["job_id"])
+    except Exception as exc:
+        annotation_job = {
+            "status": "failed_to_start",
+            "message": f"案例已保存，但精细标注启动失败：{type(exc).__name__}: {exc}",
+        }
+    return {"case_id": case_id, "message": "案例保存成功", "annotation_job": annotation_job}
 
 
 @router.get("/list")
@@ -124,6 +135,104 @@ def get_similar_cases(case_id: str, limit: int = 5) -> List[ProcessCase]:
     # TODO: 实现更智能的相似度匹配
     drawing_info = case.drawing_parse_result.model_dump()
     return case_service.get_similar_cases(drawing_info, limit)
+
+
+@router.post("/{case_id}/annotations/start")
+async def start_case_annotation(case_id: str, background_tasks: BackgroundTasks) -> dict:
+    """启动案例精细标注后台任务。"""
+    try:
+        job = case_annotation_service.start_job(case_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="案例不存在")
+    background_tasks.add_task(case_annotation_service.run_job, case_id, job["job_id"])
+    return job
+
+
+@router.post("/{case_id}/annotation/start")
+async def start_case_annotation_legacy(case_id: str, background_tasks: BackgroundTasks) -> dict:
+    return await start_case_annotation(case_id, background_tasks)
+
+
+@router.post("/{case_id}/annotations/retry")
+async def retry_case_annotation(case_id: str, background_tasks: BackgroundTasks) -> dict:
+    """重新启动案例精细标注后台任务。"""
+    try:
+        job = case_annotation_service.start_job(case_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="案例不存在")
+    background_tasks.add_task(case_annotation_service.run_job, case_id, job["job_id"])
+    return job
+
+
+@router.post("/{case_id}/annotation/retry")
+async def retry_case_annotation_legacy(case_id: str, background_tasks: BackgroundTasks) -> dict:
+    return await retry_case_annotation(case_id, background_tasks)
+
+
+@router.get("/{case_id}/annotations/status")
+def get_case_annotation_status(case_id: str) -> dict:
+    """获取案例精细标注最新任务状态。"""
+    if not case_service.load_case(case_id):
+        raise HTTPException(status_code=404, detail="案例不存在")
+    job = case_annotation_service.get_latest_job(case_id)
+    return job or {
+        "case_id": case_id,
+        "status": "not_started",
+        "stage": "not_started",
+        "progress": 0,
+        "message": "尚未启动精细标注",
+    }
+
+
+@router.get("/{case_id}/annotation/status")
+def get_case_annotation_status_legacy(case_id: str) -> dict:
+    return get_case_annotation_status(case_id)
+
+
+@router.get("/{case_id}/annotations/result")
+def get_case_annotation_result(case_id: str) -> dict:
+    """获取案例精细标注结果。"""
+    if not case_service.load_case(case_id):
+        raise HTTPException(status_code=404, detail="案例不存在")
+    result = case_annotation_service.get_result(case_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="精细标注结果不存在")
+    return result
+
+
+@router.get("/{case_id}/annotation/result")
+def get_case_annotation_result_legacy(case_id: str) -> dict:
+    return get_case_annotation_result(case_id)
+
+
+@router.get("/{case_id}/annotations/assets/{job_id}/{asset_path:path}")
+def get_case_annotation_asset(case_id: str, job_id: str, asset_path: str) -> FileResponse:
+    """读取案例精细标注生成资源。"""
+    try:
+        path = case_annotation_service.resolve_asset(case_id, job_id, asset_path)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="资源不存在")
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="资源不存在")
+    return FileResponse(path)
+
+
+@router.get("/{case_id}/annotation/assets/{job_id}/{asset_path:path}")
+def get_case_annotation_asset_legacy(case_id: str, job_id: str, asset_path: str) -> FileResponse:
+    return get_case_annotation_asset(case_id, job_id, asset_path)
+
+
+@router.post("/{case_id}/load-to-workbench")
+def load_case_to_workbench(case_id: str) -> dict:
+    """只返回案例绑定文件名，供前端复用 uploads 重新分析。"""
+    case = case_service.load_case(case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="案例不存在")
+    return {
+        "case_id": case.case_id,
+        "case_name": case.case_name,
+        "source_files": [item.model_dump(mode="json") for item in case.source_files],
+    }
 
 
 @router.post("/knowledge/search")

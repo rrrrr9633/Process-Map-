@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     agent_max_pdf_text_chars: int = 12000
     agent_goal: str = "根据 PDF 图纸中的复杂图片和标注拆分为可执行工艺流程图"
 
+    # 数据库配置
+    mysql_host: str = "localhost"
+    mysql_port: int = 3306
+    mysql_user: str = "root"
+    mysql_password: str = ""
+    mysql_database: str = "cutr"
+    mysql_charset: str = "utf8mb4"
+
     # 应用配置
     app_env: str = "production"
     debug: bool = False
@@ -57,6 +65,14 @@ class Settings(BaseSettings):
     # 数据路径
     archive_path: Path = Path("./archives")
     knowledge_base_path: Path = Path("./knowledge_base")
+
+    @property
+    def database_url(self) -> str:
+        return (
+            f"mysql+pymysql://{self.mysql_user}:{self.mysql_password}"
+            f"@{self.mysql_host}:{self.mysql_port}/{self.mysql_database}"
+            f"?charset={self.mysql_charset}"
+        )
 
     @property
     def cors_origins(self) -> list[str]:
