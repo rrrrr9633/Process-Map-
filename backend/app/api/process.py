@@ -33,6 +33,8 @@ parser = DrawingParser()
 generator = ProcessGenerator()
 flow_builder = FlowBuilder()
 export_service = ExportService()
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+UPLOADS_DIR = BACKEND_DIR / "uploads"
 
 
 class ArchiveResponse(BaseModel):
@@ -259,7 +261,7 @@ async def create_job_from_stored(
     request: FromStoredJobRequest,
     background_tasks: BackgroundTasks,
 ) -> ProcessJob:
-    upload_dir = Path("./uploads")
+    upload_dir = UPLOADS_DIR
     upload_dir.mkdir(exist_ok=True, parents=True)
     paths = _resolve_stored_uploads(request.stored_names, upload_dir)
     path_strings = [str(path) for path in paths]
@@ -281,7 +283,7 @@ async def upload_batch_job(
     if not files:
         raise HTTPException(status_code=400, detail="请至少上传 1 个图纸文件")
 
-    upload_dir = Path("./uploads")
+    upload_dir = UPLOADS_DIR
     upload_dir.mkdir(exist_ok=True, parents=True)
     temp_paths = [await _store_upload(file, upload_dir) for file in files]
     job = job_service.create_job([str(path) for path in temp_paths])
@@ -444,7 +446,7 @@ async def upload_and_generate(
     mode: ProcessMode = ProcessMode.STANDARD_8,
     use_ai_enhancement: bool = False,
 ) -> ProcessGenerationResponse:
-    upload_dir = Path("./uploads")
+    upload_dir = UPLOADS_DIR
     upload_dir.mkdir(exist_ok=True, parents=True)
     temp_path = await _store_upload(file, upload_dir)
 
@@ -461,7 +463,7 @@ async def upload_batch_and_generate(
     if not files:
         raise HTTPException(status_code=400, detail="请至少上传 1 个图纸文件")
 
-    upload_dir = Path("./uploads")
+    upload_dir = UPLOADS_DIR
     upload_dir.mkdir(exist_ok=True, parents=True)
 
     temp_paths = [await _store_upload(file, upload_dir) for file in files]

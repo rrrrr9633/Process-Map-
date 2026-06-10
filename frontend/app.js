@@ -1411,7 +1411,7 @@ function displayCases(cases) {
             html += `</p>`;
         }
         html += `<div style="margin-top:10px;">`;
-        html += `<button class="btn btn-sm btn-danger" onclick="deleteCase(event, '${escapeHtml(c.case_id)}', '${escapeHtml(c.case_name)}')">删除案例和对应文件</button>`;
+        html += `<button type="button" class="btn btn-sm btn-danger" onclick="deleteCase(event, '${escapeHtml(c.case_id)}', '${escapeHtml(c.case_name)}')">删除案例和对应文件</button>`;
         html += `</div>`;
         html += `</div>`;
     });

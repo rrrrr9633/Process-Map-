@@ -9,6 +9,10 @@ from app.config import settings
 from app.models.case import CaseQuality, CaseStatus, HumanEdit, KnowledgeEntry, ProcessCase
 
 
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+UPLOADS_DIR = BACKEND_DIR / "uploads"
+
+
 class CaseService:
     """案例管理服务"""
     
@@ -54,7 +58,7 @@ class CaseService:
 
         if delete_source_files and referenced_names:
             still_referenced = self._referenced_source_file_names()
-            upload_root = Path("./uploads").resolve()
+            upload_root = UPLOADS_DIR.resolve()
             for stored_name in referenced_names:
                 if stored_name in still_referenced:
                     retained_files.append(stored_name)
