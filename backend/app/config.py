@@ -16,6 +16,32 @@ class Settings(BaseSettings):
     ai_api_base: str = ""
     ai_model_name: str = ""
     ai_timeout_seconds: float = 500
+    ai_active_profile: str = "default"
+
+    # 可切换模型档案：配置页只切换档案，不暴露密钥
+    openai_model_provider: str = "openai_compatible"
+    openai_api_key: str = ""
+    openai_api_base: str = "https://api.openai.com/v1"
+    openai_model_name: str = ""
+    openai_timeout_seconds: float = 500
+
+    ark_model_provider: str = "ark_responses"
+    ark_api_key: str = ""
+    ark_api_base: str = "https://ark.cn-beijing.volces.com/api/v3"
+    ark_model_name: str = "doubao-seed-2-0-pro-260215"
+    ark_timeout_seconds: float = 500
+
+    gpt55_model_provider: str = "openai_compatible"
+    gpt55_api_key: str = ""
+    gpt55_api_base: str = ""
+    gpt55_model_name: str = "gpt-5.5"
+    gpt55_timeout_seconds: float = 500
+
+    doubao_visionpro_model_provider: str = "openai_compatible"
+    doubao_visionpro_api_key: str = ""
+    doubao_visionpro_api_base: str = ""
+    doubao_visionpro_model_name: str = "doubao-vision-pro"
+    doubao_visionpro_timeout_seconds: float = 500
 
     # OCR 配置
     ocr_provider: str = "none"

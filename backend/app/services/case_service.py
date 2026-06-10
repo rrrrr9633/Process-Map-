@@ -151,11 +151,19 @@ class CaseService:
         self.save_case(case)
         return True
 
-    def update_status(self, case_id: str, status: CaseStatus, reviewer: Optional[str] = None, comments: Optional[str] = None) -> bool:
+    def update_status(
+        self,
+        case_id: str,
+        status: CaseStatus,
+        quality: Optional[CaseQuality] = None,
+        reviewer: Optional[str] = None,
+        comments: Optional[str] = None,
+    ) -> bool:
         case = self.load_case(case_id)
         if not case:
             return False
         case.status = status
+        case.quality = quality
         if reviewer:
             case.reviewer = reviewer
         if comments:

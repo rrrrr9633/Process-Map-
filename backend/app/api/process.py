@@ -181,19 +181,16 @@ async def _run_process_job(
             job_id,
             stage="flow_generating",
             status="running",
-            progress=10,
             message=f"快速层：正在基于 {total} 份图纸生成工艺流程",
             ai_stream_preview="AI 快速工艺流程请求已发出，正在等待模型返回第一段内容",
             ai_stream_chunks=0,
         )
 
         def on_flow_stream_delta(delta: str, chunk_count: int, content: str) -> None:
-            progress = min(85, 10 + chunk_count // 20)
             job_service.update(
                 job_id,
                 stage="flow_generating",
                 status="running",
-                progress=progress,
                 message=f"快速层：AI 正在生成工艺流程，已接收 {chunk_count} 段内容",
                 ai_stream_preview=content,
                 ai_stream_chunks=chunk_count,

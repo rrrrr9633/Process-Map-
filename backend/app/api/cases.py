@@ -20,6 +20,7 @@ class SaveCaseRequest(BaseModel):
 
 class UpdateCaseStatusRequest(BaseModel):
     status: CaseStatus
+    quality: Optional[CaseQuality] = None
     reviewer: Optional[str] = None
     comments: Optional[str] = None
 
@@ -128,6 +129,7 @@ def update_status(case_id: str, request: UpdateCaseStatusRequest) -> dict:
     success = case_service.update_status(
         case_id,
         request.status,
+        request.quality,
         request.reviewer,
         request.comments
     )

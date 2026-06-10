@@ -55,13 +55,31 @@ nano backend/.env
 至少填写：
 
 ```bash
-AI_API_KEY=你的模型密钥
 APP_ENV=production
 DEBUG=false
 PUBLIC_API_BASE=https://tianxiadiyi.xyz
 PUBLIC_SERVER_IP=154.201.65.69
 ALLOWED_ORIGINS=https://tianxiadiyi.xyz,http://tianxiadiyi.xyz,https://154.201.65.69,http://154.201.65.69,http://localhost:8080,http://127.0.0.1:8080
 ```
+
+大模型密钥可以同时配置多套，互不覆盖。配置页可以切换当前使用的模型档案：
+
+```bash
+# OpenAI / GPT 档案
+OPENAI_API_KEY=你的OpenAI密钥
+OPENAI_API_BASE=https://api.openai.com/v1
+OPENAI_MODEL_NAME=你的OpenAI模型名
+
+# 火山 Ark / 豆包档案，使用 /api/v3/responses
+ARK_API_KEY=你的火山Ark密钥
+ARK_API_BASE=https://ark.cn-beijing.volces.com/api/v3
+ARK_MODEL_NAME=doubao-seed-2-0-pro-260215
+
+# 可选：服务启动时默认启用哪个档案：default、gpt55、ark_doubao
+AI_ACTIVE_PROFILE=ark_doubao
+```
+
+旧的 `AI_API_KEY` / `AI_API_BASE` / `AI_MODEL_NAME` 仍可作为 `default` 档案使用；建议新配置优先使用 `OPENAI_*` 和 `ARK_*`，避免不同供应商密钥互相覆盖。
 
 如果暂时不用 AI OCR：
 

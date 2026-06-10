@@ -10,6 +10,7 @@ import httpx
 
 from app.config import settings
 from app.models.process import ProcessPlan
+from app.services.model_profile_service import model_profile_service
 
 
 class AIServiceError(RuntimeError):
@@ -20,12 +21,31 @@ class AIService:
     """AI 大模型服务：Agent 主链负责图纸理解，旧链路只做兼容增强。"""
 
     def __init__(self):
-        self.provider = settings.ai_model_provider
-        self.api_key = settings.ai_api_key
-        self.api_base = settings.ai_api_base.rstrip("/")
-        self.model_name = settings.ai_model_name
-        self.timeout_seconds = settings.ai_timeout_seconds
-        self.enabled = bool(self.api_key)
+        pass
+
+    @property
+    def provider(self) -> str:
+        return model_profile_service.active_profile().provider
+
+    @property
+    def api_key(self) -> str:
+        return model_profile_service.active_profile().api_key
+
+    @property
+    def api_base(self) -> str:
+        return model_profile_service.active_profile().api_base
+
+    @property
+    def model_name(self) -> str:
+        return model_profile_service.active_profile().model
+
+    @property
+    def timeout_seconds(self) -> float:
+        return model_profile_service.active_profile().timeout_seconds
+
+    @property
+    def enabled(self) -> bool:
+        return model_profile_service.active_profile().configured
 
     def ocr_image_text(self, image_path: Path, *, prompt: str | None = None) -> str:
         """同步调用多模态模型提取图纸文字（供 OCR 链路复用 AI_API_KEY）。"""
@@ -61,11 +81,18 @@ class AIService:
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         try:
             with httpx.Client(timeout=self.timeout_seconds) as client:
-                response = client.post(f"{self.api_base}/chat/completions", headers=headers, json=payload)
+                if self._uses_responses_api:
+                    response = client.post(
+                        f"{self.api_base}/responses",
+                        headers=headers,
+                        json=self._responses_payload(payload),
+                    )
+                else:
+                    response = client.post(f"{self.api_base}/chat/completions", headers=headers, json=payload)
             if response.status_code >= 400:
                 return ""
             data = response.json()
-            content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content")) or ""
+            content = self._response_text(data)
             return str(content).strip()
         except Exception:
             return ""
@@ -434,6 +461,14 @@ class AIService:
             flush=True,
         )
 
+        if self._uses_responses_api:
+            return await self._responses_completion(
+                payload,
+                on_stream_delta=on_stream_delta,
+                request_timeout=request_timeout,
+                request_started_at=request_started_at,
+            )
+
         async with httpx.AsyncClient(timeout=request_timeout) as client:
             print("[ai] stream request start: json_mode=true", flush=True)
             response = await self._post_stream(client, headers, stream_payload, on_stream_delta=on_stream_delta)
@@ -453,6 +488,114 @@ class AIService:
                     return response
 
             raise AIServiceError("AI 流式请求没有返回内容；已停止降级为非流式长时间等待")
+
+    @property
+    def _uses_responses_api(self) -> bool:
+        return self.provider in {"ark_responses", "responses"}
+
+    async def _responses_completion(
+        self,
+        payload: dict[str, Any],
+        *,
+        on_stream_delta: Any | None,
+        request_timeout: float | None,
+        request_started_at: float,
+    ) -> str:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        response_payload = self._responses_payload(payload)
+        async with httpx.AsyncClient(timeout=request_timeout) as client:
+            print("[ai] responses request start", flush=True)
+            response = await client.post(f"{self.api_base}/responses", headers=headers, json=response_payload)
+        if response.status_code >= 400:
+            self._raise_for_ai_response_sync(response)
+        content = self._response_text(response.json()).strip()
+        if on_stream_delta and content:
+            try:
+                on_stream_delta(content, 1, content)
+            except Exception as exc:
+                print(f"[ai] responses callback failed: {type(exc).__name__}: {exc}", flush=True)
+        elapsed_ms = int((perf_counter() - request_started_at) * 1000)
+        print(f"[ai] responses request done in {elapsed_ms}ms, chars={len(content)}", flush=True)
+        if not content:
+            raise AIServiceError("AI Responses 请求没有返回文本内容")
+        return content
+
+    def _responses_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        instructions: list[str] = []
+        input_messages: list[dict[str, Any]] = []
+        for message in payload.get("messages", []):
+            role = message.get("role", "user")
+            content = message.get("content", "")
+            if role == "system":
+                instructions.append(self._message_content_to_text(content))
+                continue
+            input_messages.append(
+                {
+                    "role": role,
+                    "content": self._responses_content(content),
+                }
+            )
+
+        response_payload: dict[str, Any] = {
+            "model": payload.get("model") or self.model_name,
+            "input": input_messages,
+        }
+        if instructions:
+            response_payload["instructions"] = "\n".join(item for item in instructions if item)
+        if "temperature" in payload:
+            response_payload["temperature"] = payload["temperature"]
+        return response_payload
+
+    def _responses_content(self, content: Any) -> list[dict[str, Any]]:
+        if isinstance(content, str):
+            return [{"type": "input_text", "text": content}]
+        if not isinstance(content, list):
+            return [{"type": "input_text", "text": json.dumps(content, ensure_ascii=False)}]
+
+        converted: list[dict[str, Any]] = []
+        for part in content:
+            if not isinstance(part, dict):
+                converted.append({"type": "input_text", "text": str(part)})
+                continue
+            part_type = part.get("type")
+            if part_type == "text":
+                converted.append({"type": "input_text", "text": str(part.get("text", ""))})
+            elif part_type == "image_url":
+                image_url = part.get("image_url") or {}
+                url = image_url.get("url") if isinstance(image_url, dict) else image_url
+                if url:
+                    converted.append({"type": "input_image", "image_url": str(url)})
+            else:
+                converted.append({"type": "input_text", "text": json.dumps(part, ensure_ascii=False)})
+        return converted or [{"type": "input_text", "text": ""}]
+
+    def _message_content_to_text(self, content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            texts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    texts.append(str(part.get("text", "")))
+            return "\n".join(texts)
+        return json.dumps(content, ensure_ascii=False)
+
+    def _response_text(self, data: dict[str, Any]) -> str:
+        if data.get("output_text"):
+            return str(data["output_text"])
+        output_parts: list[str] = []
+        for item in data.get("output", []) or []:
+            for content in item.get("content", []) or []:
+                if isinstance(content, dict):
+                    text = content.get("text") or content.get("output_text")
+                    if text:
+                        output_parts.append(str(text))
+        if output_parts:
+            return "".join(output_parts)
+        return str((((data.get("choices") or [{}])[0].get("message") or {}).get("content")) or "")
 
     async def _post_stream(
         self,
@@ -521,6 +664,10 @@ class AIService:
         return self._format_error_detail(body)
 
     async def _raise_for_ai_response(self, response: httpx.Response) -> None:
+        detail = self._format_error_detail(response.content)
+        self._raise_ai_status_error(response.status_code, detail)
+
+    def _raise_for_ai_response_sync(self, response: httpx.Response) -> None:
         detail = self._format_error_detail(response.content)
         self._raise_ai_status_error(response.status_code, detail)
 

@@ -22,6 +22,7 @@ let lastJob = null;
 let boundCaseSourceFiles = null;
 let boundCaseDisplayNames = [];
 let caseAnnotationPollTimer = null;
+let mermaidZoom = 1;
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -120,6 +121,31 @@ function formatFileSize(size) {
     return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function caseStatusLabel(status) {
+    return {
+        draft: '草稿',
+        reviewed: '已审核',
+        approved: '已批准',
+        archived: '已归档',
+    }[status] || status || '草稿';
+}
+
+function caseQualityLabel(quality) {
+    return {
+        excellent: '优秀',
+        good: '良好',
+        normal: '一般',
+        poor: '较差',
+    }[quality] || '未评级';
+}
+
+function renderCaseSelectOptions(options, selectedValue) {
+    return options.map(option => {
+        const selected = option.value === selectedValue ? 'selected' : '';
+        return `<option value="${escapeHtml(option.value)}" ${selected}>${escapeHtml(option.label)}</option>`;
+    }).join('');
+}
+
 function renderOperationList(title, values) {
     if (!values || values.length === 0) return '';
     const items = values
@@ -132,6 +158,16 @@ function renderOperationList(title, values) {
             <strong>${escapeHtml(title)}：</strong>
             <ul>${items}</ul>
         </div>
+    `;
+}
+
+function renderResultModule(title, body, { open = false, className = '' } = {}) {
+    if (!body) return '';
+    return `
+        <details class="result-section result-module ${className}" ${open ? 'open' : ''}>
+            <summary>${escapeHtml(title)}</summary>
+            <div class="result-module-body">${body}</div>
+        </details>
     `;
 }
 
@@ -195,31 +231,69 @@ function renderGenerationAiResponse(aiResponse, { details = false } = {}) {
     return html;
 }
 
-function renderProcessGuidance(guidance) {
-    if (!guidance) {
-        return '';
-    }
+function buildFallbackProcessGuidance(data) {
+    const operations = data?.process_plan?.operations || [];
+    const part = data?.parse_result?.part || {};
+    const partName = part.part_name || part.drawing_no || '当前零件';
+    const operationNames = operations
+        .map(op => op.operation_name || op.operation_no)
+        .filter(Boolean);
+    const reviewItems = [];
+    operations.forEach(op => {
+        (op.drawing_basis || []).slice(0, 1).forEach(item => reviewItems.push(`${op.operation_name || op.operation_no || '工序'}：${item}`));
+        if (op.requires_manual_review) reviewItems.push(`${op.operation_name || op.operation_no || '工序'} 需要人工复核`);
+    });
+
+    return {
+        feasibility: operations.length ? 'medium' : 'low',
+        feasibility_text: operations.length
+            ? '已基于当前工序方案整理出可执行的文字指导。'
+            : '当前结果缺少工序方案，无法形成完整文字指导。',
+        quality_score: operations.length ? 3.5 : 1,
+        executive_summary: operations.length
+            ? `${partName} 当前建议按 ${operations.length} 道工序组织：${operationNames.slice(0, 8).join(' -> ')}${operationNames.length > 8 ? ' ...' : ''}。`
+            : '暂无可汇总的工序内容。',
+        data_readability: data?.process_guidance
+            ? ''
+            : '后端未返回独立的最终文字指导，本模块由前端根据工序方案自动整理。',
+        recommended_workflow: operations.map((op, index) => `${index + 1}. ${op.operation_name || op.operation_no || '未命名工序'}：${op.content || '按工序卡片执行'}`),
+        metrics: [
+            { label: '工序数量', value: String(operations.length), note: '来自当前工序方案' },
+            { label: '需复核工序', value: String(operations.filter(op => op.requires_manual_review).length), note: '按工序标记统计' },
+        ],
+        key_usable_data: [
+            part.material ? `材料：${part.material}` : '',
+            part.blank_type ? `毛坯：${part.blank_type}` : '',
+            part.heat_treatment ? `热处理：${part.heat_treatment}` : '',
+        ].filter(Boolean),
+        issues: [],
+        manual_review: reviewItems.slice(0, 8),
+        next_actions: ['优先展开“图文对照流程”核对工序顺序', '再展开“工序方案”逐道确认设备、检验项和图纸依据'],
+    };
+}
+
+function renderProcessGuidance(guidance, { open = true, data = null } = {}) {
+    const visibleGuidance = guidance || buildFallbackProcessGuidance(data);
     const feasibilityLabel = {
         high: '可行性高',
         medium: '可行性中等',
         low: '可行性低',
-    }[guidance.feasibility] || '待评估';
+    }[visibleGuidance.feasibility] || '待评估';
 
-    let html = '<div class="result-section guidance-panel">';
-    html += '<h3>最终文字指导</h3>';
+    let html = '<div class="guidance-panel">';
     html += '<div class="guidance-head">';
-    html += `<div><span class="guidance-status">${escapeHtml(feasibilityLabel)}</span><strong>${escapeHtml(guidance.feasibility_text || '')}</strong></div>`;
-    html += `<div class="guidance-score">${escapeHtml(String(guidance.quality_score ?? '-'))}<small>/5</small></div>`;
+    html += `<div><span class="guidance-status">${escapeHtml(feasibilityLabel)}</span><strong>${escapeHtml(visibleGuidance.feasibility_text || '')}</strong></div>`;
+    html += `<div class="guidance-score">${escapeHtml(String(visibleGuidance.quality_score ?? '-'))}<small>/5</small></div>`;
     html += '</div>';
-    if (guidance.executive_summary) {
-        html += `<div class="info">${escapeHtml(guidance.executive_summary)}</div>`;
+    if (visibleGuidance.executive_summary) {
+        html += `<div class="info">${escapeHtml(visibleGuidance.executive_summary)}</div>`;
     }
-    if (guidance.data_readability) {
-        html += `<div class="info">${escapeHtml(guidance.data_readability)}</div>`;
+    if (visibleGuidance.data_readability) {
+        html += `<div class="info">${escapeHtml(visibleGuidance.data_readability)}</div>`;
     }
-    if (guidance.metrics && guidance.metrics.length > 0) {
+    if (visibleGuidance.metrics && visibleGuidance.metrics.length > 0) {
         html += '<div class="guidance-metrics">';
-        guidance.metrics.forEach(metric => {
+        visibleGuidance.metrics.forEach(metric => {
             html += '<div class="guidance-metric">';
             html += `<strong>${escapeHtml(metric.value || '')}</strong>`;
             html += `<span>${escapeHtml(metric.label || '')}</span>`;
@@ -228,13 +302,13 @@ function renderProcessGuidance(guidance) {
         });
         html += '</div>';
     }
-    html += renderGuidanceList('可直接利用的数据', guidance.key_usable_data);
-    html += renderGuidanceIssues(guidance.issues);
-    html += renderGuidanceList('建议流程', guidance.recommended_workflow);
-    html += renderGuidanceList('人工复核清单', guidance.manual_review);
-    html += renderGuidanceList('下一步动作', guidance.next_actions);
+    html += renderGuidanceList('可直接利用的数据', visibleGuidance.key_usable_data);
+    html += renderGuidanceIssues(visibleGuidance.issues);
+    html += renderGuidanceList('建议流程', visibleGuidance.recommended_workflow);
+    html += renderGuidanceList('人工复核清单', visibleGuidance.manual_review);
+    html += renderGuidanceList('下一步动作', visibleGuidance.next_actions);
     html += '</div>';
-    return html;
+    return renderResultModule('最终文字指导', html, { open, className: 'guidance-module' });
 }
 
 function buildAnnotationGuidance(explanations) {
@@ -378,6 +452,7 @@ async function loadConfigStatus() {
     const ocrStatus = document.getElementById('ocr-status');
     const visionStatus = document.getElementById('vision-status');
     const settingsDetail = document.getElementById('settings-detail');
+    const modelProfileSelect = document.getElementById('model-profile-select');
 
     if (!apiBaseDisplay || !aiStatus || !ocrStatus || !visionStatus || !settingsDetail) return;
 
@@ -395,25 +470,66 @@ async function loadConfigStatus() {
         const ai = config.ai || {};
         const ocr = config.ocr || {};
         const vision = config.vision || {};
+        const modelProfiles = config.model_profiles || {};
+        const profiles = modelProfiles.profiles || [];
 
         apiBaseDisplay.textContent = config.api_base || API_BASE;
-        aiStatus.textContent = ai.configured ? `已配置：${ai.provider || 'custom'} / ${ai.model || '未指定模型'}` : '未配置：缺少 AI_API_KEY';
+        aiStatus.textContent = ai.configured ? `已配置：${ai.provider || 'custom'} / ${ai.model || '未指定模型'} / ${ai.active_profile || 'default'}` : '未配置：当前模型档案缺少密钥/API地址/模型名';
         ocrStatus.textContent = ocr.configured ? `已配置：${ocr.provider || 'custom'}` : `未启用：${ocr.provider || 'none'}`;
         visionStatus.textContent = vision.configured ? `已配置：${vision.provider || 'custom'}` : `未启用：${vision.provider || 'none'}`;
 
+        if (modelProfileSelect) {
+            modelProfileSelect.innerHTML = profiles.map(profile => {
+                const selected = profile.profile_id === modelProfiles.active_profile ? 'selected' : '';
+                const configured = profile.configured ? '已配置' : '未配置';
+                return `<option value="${escapeHtml(profile.profile_id)}" ${selected}>${escapeHtml(profile.label)} - ${escapeHtml(configured)}</option>`;
+            }).join('');
+        }
+
         const aiBase = ai.api_base || '未配置';
         const timeout = ai.timeout_seconds ? `${ai.timeout_seconds} 秒` : '未配置';
+        const profileRows = profiles.map(profile => `
+            <div>
+                <strong>${escapeHtml(profile.label)}：</strong>
+                ${escapeHtml(profile.configured ? '已配置' : '未配置')} /
+                ${escapeHtml(profile.model || '未指定模型')} /
+                ${escapeHtml(profile.api_base || '未配置 API 地址')}
+            </div>
+        `).join('');
         settingsDetail.innerHTML = `
             <div><strong>AI 接口：</strong>${escapeHtml(aiBase)}</div>
             <div><strong>AI 模型：</strong>${escapeHtml(ai.model || '未配置')}</div>
             <div><strong>AI 超时：</strong>${escapeHtml(timeout)}</div>
-            <div><strong>说明：</strong>配置页只读取后端环境变量状态；密钥不会在前端展示。</div>
+            <div><strong>模型档案：</strong>${escapeHtml(modelProfiles.active_profile || 'default')}</div>
+            ${profileRows}
+            <div><strong>说明：</strong>配置页只切换后端模型档案；密钥不会在前端展示。切换后新的 Agent 请求立即使用新模型。</div>
         `;
     } catch (error) {
         aiStatus.textContent = '状态读取失败';
         ocrStatus.textContent = '状态读取失败';
         visionStatus.textContent = '状态读取失败';
         settingsDetail.textContent = `无法读取 /config/status：${error.message}`;
+    }
+}
+
+async function switchModelProfile() {
+    const select = document.getElementById('model-profile-select');
+    if (!select || !select.value) {
+        alert('请选择模型档案');
+        return;
+    }
+    try {
+        const response = await fetch(`${API_BASE}/config/model-profile`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ profile_id: select.value }),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+        const result = await response.json();
+        alert(`已切换到：${result.active?.label || result.active_profile}`);
+        await loadConfigStatus();
+    } catch (error) {
+        alert('模型切换失败：' + error.message);
     }
 }
 
@@ -719,7 +835,7 @@ async function pollProcessJob(jobId, startedAt, uploadInfo) {
             ? `失败原因：${job.error || job.message || '任务失败'}；未生成可用工序结果。`
             : aiPreview
                 ? `阶段：${job.stage}；AI 已返回 ${job.ai_stream_chunks || 0} 段内容，正在等待完整结果。`
-                : `阶段：${job.stage}；进度：${job.progress || 0}%。`;
+                : `阶段：${job.stage}；正在等待后端返回结果。`;
         setGenerationProgress(
             job.message || (isFailed ? '任务失败' : '任务处理中'),
             jobDetail,
@@ -1080,13 +1196,16 @@ function renderReadableFlow(operations = []) {
     return `
         <div class="readable-flow">
             ${operations.map((op, index) => `
-                <div class="flow-step-card">
-                    <div class="flow-step-index">${index + 1}</div>
-                    <div class="flow-step-body">
-                        <div class="flow-step-header">
+                <details class="flow-step-card" ${index === 0 ? 'open' : ''}>
+                    <summary>
+                        <span class="flow-step-index">${index + 1}</span>
+                        <span class="flow-step-summary">
                             <span class="operation-no">${escapeHtml(op.operation_no || String(index + 1))}</span>
                             <strong>${escapeHtml(op.operation_name || '未命名工序')}</strong>
-                        </div>
+                            <small>${escapeHtml(op.content || '暂无工序说明')}</small>
+                        </span>
+                    </summary>
+                    <div class="flow-step-body">
                         <p>${escapeHtml(op.content || '暂无工序说明')}</p>
                         <div class="flow-step-meta">
                             ${(op.targets || []).slice(0, 3).map(item => `<span>对象：${escapeHtml(item)}</span>`).join('')}
@@ -1099,9 +1218,151 @@ function renderReadableFlow(operations = []) {
                             </div>
                         ` : ''}
                     </div>
-                </div>
+                </details>
                 ${index < operations.length - 1 ? '<div class="flow-step-arrow">↓</div>' : ''}
             `).join('')}
+        </div>
+    `;
+}
+
+function renderProcessOverview(operations = []) {
+    if (!operations.length) return '<div class="info">暂无工序</div>';
+    return `
+        <div class="process-overview-strip">
+            ${operations.map((op, index) => `
+                <div class="process-overview-node">
+                    <span>${index + 1}</span>
+                    <strong>${escapeHtml(op.operation_name || op.operation_no || `工序${index + 1}`)}</strong>
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+
+function renderDrawingParseModule(data) {
+    let html = '';
+    if (data.upload_info) {
+        html += '<div class="upload-summary">';
+        html += `<p><strong>上传文件：</strong>${escapeHtml(data.upload_info.name)}</p>`;
+        html += `<p><strong>文件大小：</strong>${formatFileSize(data.upload_info.size)}</p>`;
+        html += `<p><strong>后端处理：</strong>${escapeHtml(data.upload_info.supportNote)}</p>`;
+        html += '</div>';
+    }
+
+    if (data.parse_result.part) {
+        const part = data.parse_result.part;
+        html += '<div class="part-info-grid">';
+        if (part.part_name) html += `<p><strong>零件名称：</strong>${escapeHtml(part.part_name)}</p>`;
+        if (part.drawing_no) html += `<p><strong>图号：</strong>${escapeHtml(part.drawing_no)}</p>`;
+        if (part.material) html += `<p><strong>材料：</strong>${escapeHtml(part.material)}</p>`;
+        if (part.blank_type) html += `<p><strong>毛坯类型：</strong>${escapeHtml(part.blank_type)}</p>`;
+        if (part.heat_treatment) html += `<p><strong>热处理：</strong>${escapeHtml(part.heat_treatment)}</p>`;
+        html += '</div>';
+    }
+
+    if (data.parse_result.features && data.parse_result.features.length > 0) {
+        html += '<h4>识别特征</h4>';
+        html += '<div class="feature-chip-row">';
+        data.parse_result.features.forEach(f => {
+            html += `<span class="badge">${escapeHtml(f.name)}</span>`;
+        });
+        html += '</div>';
+    }
+
+    if (data.parse_result.risk_flags && data.parse_result.risk_flags.length > 0) {
+        html += '<h4>风险提示</h4>';
+        data.parse_result.risk_flags.forEach(flag => {
+            const className = flag.severity === 'critical' ? 'critical' : flag.severity === 'warning' ? 'warning' : 'info';
+            html += `<div class="${className}"><strong>${escapeHtml(flag.field)}：</strong>${escapeHtml(flag.message)}</div>`;
+        });
+    }
+
+    if (data.parse_result.raw_text) {
+        html += '<details class="nested-details">';
+        html += '<summary>查看解析原文</summary>';
+        html += `<pre class="raw-text-preview">${escapeHtml(data.parse_result.raw_text)}</pre>`;
+        html += '</details>';
+    }
+    return html || '<div class="info">暂无图纸解析结果</div>';
+}
+
+function renderOperationDetail(op, index) {
+    let html = '<div class="operation-detail-grid">';
+    html += '<div>';
+    html += `<p>${escapeHtml(op.content || '暂无工序说明')}</p>`;
+    if (op.targets && op.targets.length > 0) {
+        html += `<p><strong>加工对象：</strong>${op.targets.map(escapeHtml).join('、')}</p>`;
+    }
+    if (op.control_points && op.control_points.length > 0) {
+        html += `<p><strong>控制要点：</strong>${op.control_points.map(escapeHtml).join('；')}</p>`;
+    }
+    html += '</div>';
+    html += '<div class="operation-reference">';
+    if (op.equipment && op.equipment.length > 0) html += `<p><strong>设备：</strong>${op.equipment.map(escapeHtml).join('、')}</p>`;
+    if (op.inspection_items && op.inspection_items.length > 0) html += `<p><strong>检验项：</strong>${op.inspection_items.map(escapeHtml).join('；')}</p>`;
+    if (op.drawing_basis && op.drawing_basis.length > 0) html += renderOperationList('图纸依据', op.drawing_basis);
+    html += '</div>';
+    html += '</div>';
+    html += '<div class="worker-guidance">';
+    html += renderOperationList('操作步骤', op.worker_steps);
+    html += renderOperationList('物料/半成品', op.materials);
+    html += renderOperationList('工装刀量具', op.tools);
+    html += renderOperationList('准备要求', op.setup_requirements);
+    html += renderOperationList('安全注意', op.safety_points);
+    html += renderOperationList('质量放行', op.quality_gates);
+    html += renderOperationList('交接要求', op.handoff_requirements);
+    html += '</div>';
+    return html;
+}
+
+function renderProcessPlanModule(plan) {
+    const operations = plan.operations || [];
+    let html = `<p><strong>模式：</strong>${plan.mode === 'standard_8' ? '标准8道工序' : '详细工序'}</p>`;
+    if (plan.validation_issues && plan.validation_issues.length > 0) {
+        html += '<h4>验证问题</h4>';
+        plan.validation_issues.forEach(issue => {
+            const className = issue.severity === 'critical' ? 'critical' : issue.severity === 'warning' ? 'warning' : 'info';
+            html += `<div class="${className}"><strong>[${escapeHtml(issue.code)}]</strong> ${escapeHtml(issue.message)}</div>`;
+        });
+    }
+    html += '<div class="operation-accordion">';
+    operations.forEach((op, index) => {
+        html += `<details class="operation-card" ${index === 0 ? 'open' : ''}>`;
+        html += '<summary class="operation-header">';
+        html += `<span class="operation-no">${escapeHtml(op.operation_no || String(index + 1))}</span>`;
+        html += `<span class="operation-name">${escapeHtml(op.operation_name || '未命名工序')}</span>`;
+        if (op.mandatory) html += '<span class="badge mandatory">必须</span>';
+        if (op.requires_manual_review) html += '<span class="badge review">需审核</span>';
+        if (op.operation_type) html += `<span class="operation-type">${escapeHtml(op.operation_type)}</span>`;
+        html += '</summary>';
+        html += renderOperationDetail(op, index);
+        html += '</details>';
+    });
+    html += '</div>';
+    return html;
+}
+
+function renderFlowModule(data, flow) {
+    let html = '';
+    if (data.loaded_case_name) {
+        html += `<div class="info"><strong>案例来源：</strong>${escapeHtml(data.loaded_case_name)}。当前案例已加载为输入来源；如已绑定图纸，点击“生成工序方案”会复用对应 uploads 文件重新生成。</div>`;
+    }
+    html += renderProcessOverview(data.process_plan.operations || []);
+    html += renderReadableFlow(data.process_plan.operations || []);
+    return html;
+}
+
+function renderTechnicalFlowModule(flow) {
+    if (!flow.mermaid) return '';
+    return `
+        <div class="mermaid-toolbar">
+            <button class="btn btn-sm" type="button" onclick="setMermaidZoom(-0.15)">缩小</button>
+            <button class="btn btn-sm" type="button" onclick="resetMermaidZoom()">重置</button>
+            <button class="btn btn-sm" type="button" onclick="setMermaidZoom(0.15)">放大</button>
+            <span id="mermaid-zoom-label">100%</span>
+        </div>
+        <div class="mermaid-scroll">
+            <div class="mermaid-diagram" id="mermaid-diagram">${escapeHtml(flow.mermaid)}</div>
         </div>
     `;
 }
@@ -1110,148 +1371,42 @@ function renderReadableFlow(operations = []) {
 function displayResult(data) {
     const container = document.getElementById('generate-result');
     let html = '';
-    
+
     // 生成页只展示快速工序结果；精细图解、气泡图和标注只在案例详情页展示。
-    html += renderProcessGuidance(data.process_guidance);
+    html += renderProcessGuidance(data.process_guidance, { data });
 
     // 相似案例推荐
     if (data.similar_cases && data.similar_cases.length > 0) {
-        html += '<div class="result-section">';
-        html += '<h3>相似案例推荐</h3>';
+        let similarHtml = '';
         data.similar_cases.forEach(c => {
-            html += `<div class="info">案例：${c.case_name} (质量：${c.quality || '未评级'})</div>`;
+            similarHtml += `<div class="info">案例：${escapeHtml(c.case_name)} (质量：${escapeHtml(c.quality || '未评级')})</div>`;
         });
-        html += '</div>';
+        html += renderResultModule('相似案例推荐', similarHtml);
     }
-    
+
     // AI 回复与 Agent 执行链路
     if ((data.ai_suggestions && data.ai_suggestions.length > 0) || data.agent_trace) {
-        html += '<div class="result-section">';
-        html += '<h3>快速 AI 回复</h3>';
-        html += renderGenerationAiResponse(buildGenerationAiResponse(data));
-        html += '</div>';
+        html += renderResultModule('快速 AI 回复', renderGenerationAiResponse(buildGenerationAiResponse(data)));
     }
 
     // 图纸解析结果
-    html += '<div class="result-section">';
-    html += '<h3>图纸解析结果</h3>';
-    
-    if (data.upload_info) {
-        html += '<div class="upload-summary">';
-        html += `<p><strong>上传文件：</strong>${escapeHtml(data.upload_info.name)}</p>`;
-        html += `<p><strong>文件大小：</strong>${formatFileSize(data.upload_info.size)}</p>`;
-        html += `<p><strong>后端处理：</strong>${escapeHtml(data.upload_info.supportNote)}</p>`;
-        html += '</div>';
-    }
-    
-    if (data.parse_result.part) {
-        const part = data.parse_result.part;
-        html += '<div class="part-info-grid">';
-        if (part.part_name) html += `<p><strong>零件名称：</strong>${part.part_name}</p>`;
-        if (part.drawing_no) html += `<p><strong>图号：</strong>${part.drawing_no}</p>`;
-        if (part.material) html += `<p><strong>材料：</strong>${part.material}</p>`;
-        if (part.blank_type) html += `<p><strong>毛坯类型：</strong>${part.blank_type}</p>`;
-        if (part.heat_treatment) html += `<p><strong>热处理：</strong>${part.heat_treatment}</p>`;
-        html += '</div>';
-    }
-    
-    if (data.parse_result.features && data.parse_result.features.length > 0) {
-        html += '<h4>识别特征：</h4>';
-        data.parse_result.features.forEach(f => {
-            html += `<span class="badge" style="background:#4caf50; margin:3px;">${f.name}</span>`;
-        });
-    }
-    
-    if (data.parse_result.risk_flags && data.parse_result.risk_flags.length > 0) {
-        html += '<h4>风险提示：</h4>';
-        data.parse_result.risk_flags.forEach(flag => {
-            const className = flag.severity === 'critical' ? 'critical' : flag.severity === 'warning' ? 'warning' : 'info';
-            html += `<div class="${className}"><strong>${escapeHtml(flag.field)}:</strong> ${escapeHtml(flag.message)}</div>`;
-        });
-    }
+    html += renderResultModule('图纸解析结果', renderDrawingParseModule(data));
 
-    if (data.parse_result.raw_text) {
-        html += '<h4>解析文本：</h4>';
-        html += `<pre class="raw-text-preview">${escapeHtml(data.parse_result.raw_text)}</pre>`;
-    }
-    
-    html += '</div>';
-    
     // 工序方案
-    html += '<div class="result-section">';
-    html += `<h3>${data.process_plan.title}</h3>`;
-    html += `<p><strong>模式：</strong> ${data.process_plan.mode === 'standard_8' ? '标准8道工序' : '详细10道工序'}</p>`;
-    
-    if (data.process_plan.validation_issues && data.process_plan.validation_issues.length > 0) {
-        html += '<h4>验证问题：</h4>';
-        data.process_plan.validation_issues.forEach(issue => {
-            const className = issue.severity === 'critical' ? 'critical' : issue.severity === 'warning' ? 'warning' : 'info';
-            html += `<div class="${className}"><strong>[${issue.code}]</strong> ${issue.message}</div>`;
-        });
-    }
-    
-    html += '<h4>工序列表：</h4>';
-    data.process_plan.operations.forEach(op => {
-        html += `<div class="operation-card">`;
-        html += `<div class="operation-header">`;
-        html += `<span class="operation-no">${op.operation_no}</span>`;
-        html += `<span class="operation-name">${op.operation_name}</span>`;
-        if (op.mandatory) html += `<span class="badge mandatory">必须</span>`;
-        if (op.requires_manual_review) html += `<span class="badge review">需审核</span>`;
-        html += `<span class="operation-type">${op.operation_type}</span>`;
-        html += `</div>`;
-        html += `<p style="color:#555; margin-bottom:10px;">${escapeHtml(op.content)}</p>`;
-        
-        if (op.targets && op.targets.length > 0) {
-            html += `<p><strong>加工对象：</strong>${op.targets.map(escapeHtml).join(', ')}</p>`;
-        }
-        html += '<div class="worker-guidance">';
-        html += renderOperationList('操作步骤', op.worker_steps);
-        html += renderOperationList('物料/半成品', op.materials);
-        html += renderOperationList('工装刀量具', op.tools);
-        html += renderOperationList('准备要求', op.setup_requirements);
-        html += renderOperationList('安全注意', op.safety_points);
-        html += renderOperationList('质量放行', op.quality_gates);
-        html += renderOperationList('交接要求', op.handoff_requirements);
-        html += '</div>';
-        if (op.control_points && op.control_points.length > 0) {
-            html += `<p><strong>控制要点：</strong>${op.control_points.map(escapeHtml).join('；')}</p>`;
-        }
-        if (op.equipment && op.equipment.length > 0) {
-            html += `<p><strong>设备：</strong>${op.equipment.map(escapeHtml).join(', ')}</p>`;
-        }
-        if (op.inspection_items && op.inspection_items.length > 0) {
-            html += `<p><strong>检验项：</strong>${op.inspection_items.map(escapeHtml).join('；')}</p>`;
-        }
-        if (op.drawing_basis && op.drawing_basis.length > 0) {
-            html += renderOperationList('图纸依据', op.drawing_basis);
-        }
-        html += `</div>`;
-    });
-    
-    html += '</div>';
+    html += renderResultModule(
+        data.process_plan.title || '工序方案',
+        renderProcessPlanModule(data.process_plan),
+    );
     
     // 可读流程
     const flow = data.flow || {
         title: data.loaded_case_name ? `案例流程：${data.loaded_case_name}` : '流程图',
         mermaid: '',
     };
-    html += '<div class="result-section">';
-    html += `<h3>${escapeHtml(flow.title || '流程图')}</h3>`;
-    if (data.loaded_case_name) {
-        html += `<div class="info"><strong>案例来源：</strong>${escapeHtml(data.loaded_case_name)}。当前案例已加载为输入来源；如已绑定图纸，点击“生成工序方案”会复用对应 uploads 文件重新生成。</div>`;
-    }
-    html += '<p class="flow-readable-hint">默认展示按工序顺序展开的人话版流程；原始 Mermaid 技术图只在后端返回流程图时展示。</p>';
-    html += renderReadableFlow(data.process_plan.operations || []);
+    html += renderResultModule(flow.title || '图文对照流程', renderFlowModule(data, flow), { open: true });
     if (flow.mermaid) {
-        html += '<details class="technical-flow-details">';
-        html += '<summary>查看原始技术流程图</summary>';
-        html += '<div class="mermaid-scroll">';
-        html += `<div class="mermaid-diagram" id="mermaid-diagram">${flow.mermaid}</div>`;
-        html += '</div>';
-        html += '</details>';
+        html += renderResultModule('原始技术流程图', renderTechnicalFlowModule(flow), { className: 'technical-flow-details' });
     }
-    html += '</div>';
     
     // 操作按钮
     html += '<div class="result-section">';
@@ -1265,11 +1420,13 @@ function displayResult(data) {
     
     // 渲染流程图
     if (flow.mermaid) {
+        mermaidZoom = 1;
         setTimeout(() => {
             const element = document.getElementById('mermaid-diagram');
             if (element) {
                 mermaid.render('mermaid-svg-' + Date.now(), flow.mermaid).then(result => {
                     element.innerHTML = result.svg;
+                    applyMermaidZoom();
                 }).catch(err => {
                     console.error('Mermaid rendering error:', err);
                     element.innerHTML = '<pre>' + escapeHtml(flow.mermaid) + '</pre>';
@@ -1277,6 +1434,28 @@ function displayResult(data) {
             }
         }, 100);
     }
+}
+
+function applyMermaidZoom() {
+    const diagram = document.getElementById('mermaid-diagram');
+    const label = document.getElementById('mermaid-zoom-label');
+    if (!diagram) return;
+    diagram.style.transform = `scale(${mermaidZoom})`;
+    diagram.style.transformOrigin = 'top left';
+    diagram.style.width = `${100 / mermaidZoom}%`;
+    if (label) {
+        label.textContent = `${Math.round(mermaidZoom * 100)}%`;
+    }
+}
+
+function setMermaidZoom(delta) {
+    mermaidZoom = Math.max(0.5, Math.min(2.5, mermaidZoom + delta));
+    applyMermaidZoom();
+}
+
+function resetMermaidZoom() {
+    mermaidZoom = 1;
+    applyMermaidZoom();
 }
 
 // 编辑当前方案
@@ -1441,9 +1620,10 @@ function displayCases(cases) {
         html += `<div class="case-item" onclick="loadCase('${escapeHtml(c.case_id)}')">`;
         html += `<div class="case-header">`;
         html += `<span class="case-title">${escapeHtml(c.case_name)}</span>`;
-        html += `<span class="case-status ${escapeHtml(c.status)}">${escapeHtml(c.status)}</span>`;
+        html += `<span class="case-status ${escapeHtml(c.status || 'draft')}">${escapeHtml(caseStatusLabel(c.status))}</span>`;
         html += `</div>`;
         html += `<p style="font-size:14px; color:#666;">创建于：${new Date(c.created_at).toLocaleString()}</p>`;
+        html += `<p style="font-size:13px; color:#666;">质量：${escapeHtml(caseQualityLabel(c.quality))}</p>`;
         const sourceFiles = c.source_files || [];
         if (sourceFiles.length) {
             html += `<p style="font-size:13px; color:#666;">绑定文件：${sourceFiles.map(item => escapeHtml(item.original_name || item.stored_name)).join('、')}</p>`;
@@ -1511,6 +1691,28 @@ async function deleteCase(event, caseId, caseName) {
     }
 }
 
+async function saveCaseReview(caseId) {
+    const status = document.getElementById('case-detail-status')?.value || 'draft';
+    const quality = document.getElementById('case-detail-quality')?.value || null;
+    const reviewer = document.getElementById('case-detail-reviewer')?.value.trim() || null;
+    const comments = document.getElementById('case-detail-comments')?.value.trim() || null;
+
+    try {
+        const response = await fetch(`${API_BASE}/cases/${encodeURIComponent(caseId)}/status`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status, quality, reviewer, comments }),
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+        }
+        await loadCases();
+        await loadCase(caseId);
+    } catch (error) {
+        alert('保存案例状态失败：' + error.message);
+    }
+}
+
 // 加载单个案例详情
 async function loadCase(caseId) {
     try {
@@ -1538,9 +1740,41 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult) {
     html += `<h3>案例详情：${escapeHtml(caseData.case_name)}</h3>`;
     html += `<div class="part-info-grid">`;
     html += `<p><strong>案例ID：</strong>${escapeHtml(caseData.case_id)}</p>`;
-    html += `<p><strong>状态：</strong>${escapeHtml(caseData.status || 'draft')}</p>`;
+    html += `<p><strong>状态：</strong>${escapeHtml(caseStatusLabel(caseData.status))}</p>`;
+    html += `<p><strong>质量：</strong>${escapeHtml(caseQualityLabel(caseData.quality))}</p>`;
+    if (caseData.reviewer) html += `<p><strong>审核人：</strong>${escapeHtml(caseData.reviewer)}</p>`;
     html += `<p><strong>工序数：</strong>${operations.length}</p>`;
     html += `<p><strong>绑定图纸：</strong>${sourceFiles.length ? sourceFiles.map(item => escapeHtml(item.original_name || item.stored_name)).join('、') : '未绑定'}</p>`;
+    html += '</div>';
+    html += '<div class="case-maintenance">';
+    html += '<div class="form-row">';
+    html += '<div class="form-col">';
+    html += '<label>案例状态</label>';
+    html += `<select id="case-detail-status">${renderCaseSelectOptions([
+        { value: 'draft', label: '草稿' },
+        { value: 'reviewed', label: '已审核' },
+        { value: 'approved', label: '已批准' },
+        { value: 'archived', label: '已归档' },
+    ], caseData.status || 'draft')}</select>`;
+    html += '</div>';
+    html += '<div class="form-col">';
+    html += '<label>质量评级</label>';
+    html += `<select id="case-detail-quality">${renderCaseSelectOptions([
+        { value: '', label: '未评级' },
+        { value: 'excellent', label: '优秀' },
+        { value: 'good', label: '良好' },
+        { value: 'normal', label: '一般' },
+        { value: 'poor', label: '较差' },
+    ], caseData.quality || '')}</select>`;
+    html += '</div>';
+    html += '<div class="form-col">';
+    html += '<label>审核人</label>';
+    html += `<input id="case-detail-reviewer" type="text" value="${escapeHtml(caseData.reviewer || '')}" placeholder="可选">`;
+    html += '</div>';
+    html += '</div>';
+    html += '<label>审核备注</label>';
+    html += `<textarea id="case-detail-comments" rows="3" placeholder="记录批准、退回或质量评级依据">${escapeHtml(caseData.review_comments || '')}</textarea>`;
+    html += `<button class="btn btn-primary" type="button" onclick="saveCaseReview('${escapeHtml(caseData.case_id)}')">保存状态和质量</button>`;
     html += '</div>';
     html += '<div style="margin-top:10px;">';
     html += `<button class="btn btn-primary" onclick="loadCaseForEdit('${escapeHtml(caseData.case_id)}')">编辑工序</button>`;
@@ -1549,7 +1783,12 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult) {
     html += '</div>';
     html += '</div>';
 
-    html += renderProcessGuidance(caseData.generation_ai_response?.process_guidance);
+    html += renderProcessGuidance(caseData.generation_ai_response?.process_guidance, {
+        data: {
+            process_plan: caseData.process_plan,
+            parse_result: caseData.drawing_parse_result || {},
+        },
+    });
 
     html += '<div class="result-section">';
     html += '<h3>快速 AI 回复</h3>';

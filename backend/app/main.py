@@ -6,17 +6,23 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from app.api.cases import router as cases_router
 from app.api.process import router as process_router
 from app.config import settings
 from app.db import init_db
+from app.services.model_profile_service import model_profile_service
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = BASE_DIR / "frontend"
 INDEX_V2_PATH = FRONTEND_DIR / "index_v2.html"
 
 app = FastAPI(title="曲轴工序拆分系统", version="0.2.0")
+
+
+class ModelProfileSwitchRequest(BaseModel):
+    profile_id: str
 
 
 @app.on_event("startup")
@@ -50,16 +56,20 @@ def health() -> dict[str, str]:
 @app.get("/config/status")
 @app.get("/api/config/status")
 def config_status() -> dict:
+    model_profiles = model_profile_service.status()
+    active_ai = model_profiles["active"]
     return {
         "api_base": settings.public_api_base,
         "server_ip": settings.public_server_ip,
         "ai": {
-            "configured": bool(settings.ai_api_key),
-            "provider": settings.ai_model_provider,
-            "api_base": settings.ai_api_base,
-            "model": settings.ai_model_name,
-            "timeout_seconds": settings.ai_timeout_seconds,
+            "configured": active_ai["configured"],
+            "provider": active_ai["provider"],
+            "api_base": active_ai["api_base"],
+            "model": active_ai["model"],
+            "timeout_seconds": active_ai["timeout_seconds"],
+            "active_profile": model_profiles["active_profile"],
         },
+        "model_profiles": model_profiles,
         "ocr": {
             "configured": settings.ocr_provider != "none" and bool(settings.ocr_api_key),
             "provider": settings.ocr_provider,
@@ -71,6 +81,17 @@ def config_status() -> dict:
         },
         "app_env": settings.app_env,
         "debug": settings.debug,
+    }
+
+
+@app.post("/config/model-profile")
+@app.post("/api/config/model-profile")
+def switch_model_profile(request: ModelProfileSwitchRequest) -> dict:
+    profile = model_profile_service.set_active_profile(request.profile_id)
+    return {
+        "message": "模型档案已切换",
+        "active_profile": profile.profile_id,
+        "active": profile.public_dict(),
     }
 
 

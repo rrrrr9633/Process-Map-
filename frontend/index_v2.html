@@ -125,6 +125,7 @@
                             <option value="excellent">优秀</option>
                             <option value="good">良好</option>
                             <option value="normal">一般</option>
+                            <option value="poor">较差</option>
                         </select>
                         <button class="btn btn-sm" onclick="loadCases()">查询</button>
                     </div>
@@ -144,6 +145,11 @@
                         <p><strong>AI 服务：</strong> <span id="ai-status">加载中</span></p>
                         <p><strong>OCR 服务：</strong> <span id="ocr-status">加载中</span></p>
                         <p><strong>视觉识别：</strong> <span id="vision-status">加载中</span></p>
+                        <div class="model-switcher">
+                            <label for="model-profile-select">当前大模型</label>
+                            <select id="model-profile-select"></select>
+                            <button class="btn btn-sm" onclick="switchModelProfile()">切换模型</button>
+                        </div>
                         <div id="settings-detail" class="help-text">正在读取后端配置状态...</div>
                     </div>
                 </div>
