@@ -255,6 +255,13 @@ class CaseAnnotationService:
         return explanations
 
     def _has_usable_result(self, explanation: DrawingExplanation) -> bool:
+        risk_text = "\n".join(explanation.risk_notes or [])
+        for page in explanation.page_explanations or []:
+            risk_text += "\n" + "\n".join(page.risk_notes or [])
+            for view in page.view_explanations or []:
+                risk_text += "\n" + "\n".join(view.risk_notes or [])
+        if "AI 图解失败" in risk_text or "未完整返回" in risk_text:
+            return False
         return bool(
             explanation.page_explanations
             or explanation.visual_summary

@@ -184,10 +184,10 @@ class DrawingExplanationService:
                 split_sheet_views(image_path, max_views=max_views) if image_path and image_path.is_file() else [SheetViewRegion(1, "整页", 0.0, 0.0, 1.0, 1.0)]
             )
             if len(view_regions) <= 1:
-                payload = await ai_service.explain_single_drawing_page(
-                    file_name=path.name,
+                payload = await self._safe_explain_single_page(
+                    path.name,
                     file_index=file_index,
-                    page=page_no,
+                    page_no=page_no,
                     page_count=explanation.page_count,
                     image_payload=image_payload,
                     ocr_text=ocr_text,
@@ -231,10 +231,10 @@ class DrawingExplanationService:
             risks: list[str] = []
             for region in view_regions:
                 view_payload = crop_view_payload(image_path, region, page=page_no)
-                payload = await ai_service.explain_single_drawing_page(
-                    file_name=path.name,
+                payload = await self._safe_explain_single_page(
+                    path.name,
                     file_index=file_index,
-                    page=page_no,
+                    page_no=page_no,
                     page_count=explanation.page_count,
                     image_payload=view_payload,
                     ocr_text=ocr_text,
@@ -307,6 +307,58 @@ class DrawingExplanationService:
         explanation.risk_notes = list(dict.fromkeys(note for item in page_explanations for note in item.risk_notes))
         explanation.annotation_result = merge_annotation_results([item.annotation_result for item in page_explanations])
         return explanation
+
+    async def _safe_explain_single_page(
+        self,
+        file_name: str,
+        *,
+        file_index: int,
+        page_no: int,
+        page_count: int,
+        image_payload: dict[str, str],
+        ocr_text: str,
+        view_label: str = "",
+        view_region: dict[str, float] | None = None,
+        on_stream_delta: Any | None = None,
+    ) -> dict[str, Any]:
+        last_error: AIServiceError | None = None
+        for attempt in range(1, 4):
+            simplified = attempt == 3
+            try:
+                return await ai_service.explain_single_drawing_page(
+                    file_name=file_name,
+                    file_index=file_index,
+                    page=page_no,
+                    page_count=page_count,
+                    image_payload=image_payload,
+                    ocr_text=ocr_text,
+                    view_label=view_label,
+                    view_region=view_region,
+                    on_stream_delta=on_stream_delta,
+                    simplified=simplified,
+                )
+            except AIServiceError as exc:
+                last_error = exc
+                print(
+                    f"[drawing-explanation] page explain retry {attempt}/3 failed: "
+                    f"file={file_name}, page={page_no}, view={view_label or 'full'}, error={exc}",
+                    flush=True,
+                )
+
+        exc = last_error or AIServiceError("AI 图解失败")
+        scope = f"{view_label} " if view_label else ""
+        return {
+            "visual_summary": f"{scope}AI 图解未完整返回，已保留页面等待重试",
+            "detected_features": [],
+            "related_operations": [f"第 {file_index} 份图纸-第 {page_no} 页"],
+            "risk_notes": [f"AI 图解失败：{exc}"],
+            "annotation_result": {
+                "annotations": [],
+                "export_rows": [],
+                "bubble_diagram_available": False,
+                "review_required_count": 0,
+            },
+        }
 
     def _coerce_annotation_result(self, value: Any, *, page: int, file_index: int) -> DrawingAnnotationResult:
         if not isinstance(value, dict):

@@ -160,13 +160,15 @@ class AIService:
         view_label: str = "",
         view_region: dict[str, float] | None = None,
         on_stream_delta: Any | None = None,
+        simplified: bool = False,
     ) -> dict[str, Any]:
         if not self.enabled:
             raise AIServiceError("AI Agent 未启用：未配置 AI_API_KEY")
 
+        max_annotations = 3 if simplified else 6
         output_schema = {
             "visual_summary": "这张图纸主要表达的零件、加工步骤或检验内容，80字以内",
-            "detected_features": ["最多5个关键结构、加工对象、关键区域"],
+            "detected_features": [f"最多{3 if simplified else 5}个关键结构、加工对象、关键区域"],
             "related_operations": ["最多3个建议对应的工序名称或编号"],
             "risk_notes": ["最多3个需要人工确认的疑点"],
             "annotation_result": {
@@ -205,17 +207,18 @@ class AIService:
                         "page_count": page_count,
                         "view_label": view_label,
                         "view_region": view_region or {},
-                        "ocr_text": ocr_text[:4000],
+                        "ocr_text": ocr_text[:1500 if simplified else 4000],
                         "goal": "解释单张 PDF 图纸页面或其中一个视图，提取标注并为气泡图生成提供坐标依据",
                         "output_schema": output_schema,
                         "rules": [
                             "只返回 JSON，不要返回 Markdown。",
                             "visual_summary 必须用工人能理解的话说明这张图在表达什么，控制在80字以内。",
-                            "detected_features 最多 5 项，related_operations 最多 3 项，risk_notes 最多 3 项。",
-                            "annotations 最多 6 项，只保留当前视图中最关键、最清晰、最影响工艺的标注；不要把 OCR 中未定位的所有尺寸都展开成 annotations。",
+                            f"detected_features 最多 {3 if simplified else 5} 项，related_operations 最多 3 项，risk_notes 最多 3 项。",
+                            f"annotations 最多 {max_annotations} 项，只保留当前视图中最关键、最清晰、最影响工艺的标注；不要把 OCR 中未定位的所有尺寸都展开成 annotations。",
                             "annotations 中 region 坐标使用 unit=ratio；若提供了 view_region 则相对当前视图裁剪图 0~1，否则相对整页 0~1；无法确定坐标时只在 risk_notes 说明，不要额外创建 annotation。",
                             "结合 ocr_text 校正尺寸和标注，不要与 OCR 明显冲突。",
                             "不要编造具体尺寸、公差或材料；看不清就放入 risk_notes。",
+                            "如果不确定标注坐标，返回空 annotations 也可以，但必须返回合法 JSON。",
                         ],
                     },
                     ensure_ascii=False,
@@ -225,7 +228,7 @@ class AIService:
                 "type": "image_url",
                 "image_url": {
                     "url": f"data:{image_payload['mime_type']};base64,{image_payload['base64']}",
-                    "detail": "high",
+                        "detail": "low" if simplified else "high",
                 },
             },
         ]
@@ -234,7 +237,11 @@ class AIService:
             "messages": [
                 {
                     "role": "system",
-                    "content": "你是机械图纸图解 Agent。你只分析当前这一张图纸页面，输出严格 JSON。",
+                    "content": (
+                        "你是机械图纸图解 Agent。你只分析当前这一张图纸页面，输出严格 JSON。"
+                        if not simplified
+                        else "你是机械图纸图解 Agent。当前为降级重试，只输出简短、合法 JSON。"
+                    ),
                 },
                 {"role": "user", "content": user_content},
             ],
@@ -529,6 +536,10 @@ class AIService:
         end = text.rfind("}")
         if start >= 0 and end > start:
             candidates.append(text[start:end + 1])
+        if start >= 0:
+            repaired = self._repair_truncated_json(text[start:])
+            if repaired:
+                candidates.append(repaired)
 
         for candidate in candidates:
             try:
@@ -538,6 +549,42 @@ class AIService:
             except json.JSONDecodeError:
                 continue
         return None
+
+    def _repair_truncated_json(self, text: str) -> str | None:
+        if not text.strip().startswith("{"):
+            return None
+        result: list[str] = []
+        stack: list[str] = []
+        in_string = False
+        escape = False
+        for char in text.strip():
+            result.append(char)
+            if escape:
+                escape = False
+                continue
+            if char == "\\" and in_string:
+                escape = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if char == "{":
+                stack.append("}")
+            elif char == "[":
+                stack.append("]")
+            elif char in {"}", "]"} and stack and stack[-1] == char:
+                stack.pop()
+        if in_string:
+            result.append('"')
+        repaired = "".join(result).rstrip()
+        repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+        while stack:
+            closer = stack.pop()
+            repaired = re.sub(r",\s*$", "", repaired)
+            repaired += closer
+        return repaired
 
 
 ai_service = AIService()
