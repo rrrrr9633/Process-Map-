@@ -147,6 +147,14 @@ function renderCaseSelectOptions(options, selectedValue) {
     }).join('');
 }
 
+function defaultModelProfiles() {
+    return [
+        { profile_id: 'gpt55', label: 'OpenAI / GPT', configured: false, model: 'gpt-5.5', api_base: '' },
+        { profile_id: 'ark_doubao', label: '火山 Ark / 豆包', configured: false, model: 'doubao-seed-2-0-pro-260215', api_base: 'https://ark.cn-beijing.volces.com/api/v3' },
+        { profile_id: 'default', label: '默认环境模型', configured: false, model: '', api_base: '' },
+    ];
+}
+
 function renderOperationList(title, values) {
     if (!values || values.length === 0) return '';
     const items = values
@@ -475,7 +483,9 @@ async function loadConfigStatus() {
         const ocr = config.ocr || {};
         const vision = config.vision || {};
         const modelProfiles = config.model_profiles || {};
-        const profiles = modelProfiles.profiles || [];
+        const profiles = (modelProfiles.profiles && modelProfiles.profiles.length)
+            ? modelProfiles.profiles
+            : defaultModelProfiles();
 
         apiBaseDisplay.textContent = config.api_base || API_BASE;
         aiStatus.textContent = ai.configured ? `已配置：${ai.provider || 'custom'} / ${ai.model || '未指定模型'} / ${ai.active_profile || 'default'}` : '未配置：当前模型档案缺少密钥/API地址/模型名';
@@ -484,7 +494,7 @@ async function loadConfigStatus() {
 
         if (modelProfileSelect) {
             modelProfileSelect.innerHTML = profiles.map(profile => {
-                const selected = profile.profile_id === modelProfiles.active_profile ? 'selected' : '';
+                const selected = profile.profile_id === (modelProfiles.active_profile || modelProfileSelect?.value) ? 'selected' : '';
                 const configured = profile.configured ? '已配置' : '未配置';
                 return `<option value="${escapeHtml(profile.profile_id)}" ${selected}>${escapeHtml(profile.label)} - ${escapeHtml(configured)}</option>`;
             }).join('');
@@ -1256,6 +1266,51 @@ function renderProcessOverview(operations = []) {
     `;
 }
 
+function operationVisualLabel(op) {
+    const type = String(op.operation_type || '');
+    if (type.includes('inspection')) return '检';
+    if (type.includes('cleaning')) return '清';
+    if (type.includes('finishing')) return '精';
+    if (type.includes('rough')) return '粗';
+    if (type.includes('hole')) return '孔';
+    if (type.includes('blank')) return '坯';
+    return '工';
+}
+
+function renderWorkerVisualCards(operations = []) {
+    if (!operations.length) {
+        return '<div class="info">暂无可展示的工序图文卡</div>';
+    }
+    return `
+        <div class="worker-visual-grid">
+            ${operations.map((op, index) => `
+                <article class="worker-visual-card">
+                    <div class="worker-visual-scene" aria-hidden="true">
+                        <div class="worker-visual-badge">${escapeHtml(operationVisualLabel(op))}</div>
+                        <div class="worker-visual-line"></div>
+                        <div class="worker-visual-part"></div>
+                        <div class="worker-visual-tool"></div>
+                    </div>
+                    <div class="worker-visual-body">
+                        <div class="operation-header worker-visual-header">
+                            <span class="operation-no">${escapeHtml(op.operation_no || String(index + 1))}</span>
+                            <span class="operation-name">${escapeHtml(op.operation_name || '未命名工序')}</span>
+                        </div>
+                        <p>${escapeHtml(op.content || '暂无工序说明')}</p>
+                        <div class="flow-step-meta">
+                            ${(op.targets || []).slice(0, 2).map(item => `<span>对象：${escapeHtml(item)}</span>`).join('')}
+                            ${(op.equipment || []).slice(0, 2).map(item => `<span>设备：${escapeHtml(item)}</span>`).join('')}
+                            ${(op.inspection_items || []).slice(0, 2).map(item => `<span>检验：${escapeHtml(item)}</span>`).join('')}
+                        </div>
+                        ${renderGuidanceList('操作要点', (op.worker_steps || op.control_points || []).slice(0, 4))}
+                        ${renderGuidanceList('放行条件', (op.quality_gates || op.handoff_requirements || []).slice(0, 3))}
+                    </div>
+                </article>
+            `).join('')}
+        </div>
+    `;
+}
+
 function renderDrawingParseModule(data) {
     let html = '';
     if (data.upload_info) {
@@ -1410,6 +1465,13 @@ function displayResult(data) {
 
     // 图纸解析结果
     html += renderResultModule('图纸解析结果', renderDrawingParseModule(data));
+
+    // 工人图文作业卡
+    html += renderResultModule(
+        '工序图文作业卡',
+        renderWorkerVisualCards(data.process_plan.operations || []),
+        { open: true },
+    );
 
     // 工序方案
     html += renderResultModule(

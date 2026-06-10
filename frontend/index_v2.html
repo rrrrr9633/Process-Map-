@@ -147,7 +147,11 @@
                         <p><strong>视觉识别：</strong> <span id="vision-status">加载中</span></p>
                         <div class="model-switcher">
                             <label for="model-profile-select">当前大模型</label>
-                            <select id="model-profile-select"></select>
+                            <select id="model-profile-select">
+                                <option value="gpt55">OpenAI / GPT</option>
+                                <option value="ark_doubao">火山 Ark / 豆包</option>
+                                <option value="default">默认环境模型</option>
+                            </select>
                             <button class="btn btn-sm" id="model-profile-switch-btn" type="button">切换模型</button>
                         </div>
                         <div id="model-profile-switch-status" class="help-text">选择模型档案后点击切换。</div>
@@ -158,6 +162,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=20260610-13"></script>
+    <script src="app.js?v=20260610-16"></script>
 </body>
 </html>
