@@ -280,7 +280,7 @@ function renderGenerationProgress(stage, detail, startedAt, extraItems = [], act
             <div class="progress-steps">
                 ${items.map(item => `
                     <div class="progress-step ${item.key === activeKey ? 'active' : ''}" data-progress-key="${escapeHtml(item.key)}">
-                        <strong><span class="progress-step-spinner"></span>${escapeHtml(item.label)}</strong>
+                        <strong>${item.key === activeKey ? '<span class="progress-step-spinner"></span>' : ''}${escapeHtml(item.label)}</strong>
                         <span>${escapeHtml(item.value)}</span>
                     </div>
                 `).join('')}
@@ -403,7 +403,16 @@ function updateGenerationProgressDom(stage, detail, startedAt, extraItems = [], 
     if (detailNode) detailNode.textContent = visible.detail;
 
     loading.querySelectorAll('.progress-step').forEach(step => {
-        step.classList.toggle('active', step.dataset.progressKey === visible.activeKey);
+        const isActive = step.dataset.progressKey === visible.activeKey;
+        step.classList.toggle('active', isActive);
+        const titleNode = step.querySelector('strong');
+        const spinner = step.querySelector('.progress-step-spinner');
+        if (isActive && titleNode && !spinner) {
+            titleNode.insertAdjacentHTML('afterbegin', '<span class="progress-step-spinner"></span>');
+        }
+        if (!isActive && spinner) {
+            spinner.remove();
+        }
     });
     loading.classList.add('active');
 }
