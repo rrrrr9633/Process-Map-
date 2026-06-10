@@ -485,7 +485,8 @@ class AIService:
             print(f"[ai] stream connected: status={response.status_code}", flush=True)
             if response.status_code >= 400:
                 print(f"[ai] stream rejected: status={response.status_code}", flush=True)
-                await self._raise_for_ai_response(response)
+                detail = await self._stream_error_detail(response)
+                self._raise_ai_status_error(response.status_code, detail)
             async for line in response.aiter_lines():
                 line = line.strip()
                 if not line or not line.startswith("data:"):
@@ -519,22 +520,28 @@ class AIService:
         print(f"[ai] stream closed: chunks={chunk_count}, chars={len(content)}", flush=True)
         return content
 
-    async def _raise_for_ai_response(self, response: httpx.Response) -> None:
-        detail = await self._response_error_detail(response)
-        if response.status_code == 502:
+    def _raise_ai_status_error(self, status_code: int, detail: str = "") -> None:
+        if status_code == 502:
             raise AIServiceError(f"AI 服务网关暂时不可用（502），请稍后重试或检查 AI_API_BASE{detail}")
-        if response.status_code == 504:
+        if status_code == 504:
             raise AIServiceError(f"AI 服务网关超时（504），模型没有在网关时限内返回首段内容{detail}")
-        if response.status_code >= 500:
-            raise AIServiceError(f"AI 服务暂时不可用（HTTP {response.status_code}），请稍后重试{detail}")
-        if response.status_code >= 400:
-            raise AIServiceError(f"AI 请求失败（HTTP {response.status_code}），请检查模型名称、密钥或接口地址{detail}")
+        if status_code >= 500:
+            raise AIServiceError(f"AI 服务暂时不可用（HTTP {status_code}），请稍后重试{detail}")
+        if status_code >= 400:
+            raise AIServiceError(f"AI 请求失败（HTTP {status_code}），请检查模型名称、密钥或接口地址{detail}")
 
-    async def _response_error_detail(self, response: httpx.Response) -> str:
+    async def _stream_error_detail(self, response: httpx.Response) -> str:
         try:
             body = await response.aread()
-        except Exception:
-            body = b""
+        except Exception as exc:
+            return f"；错误体读取失败：{type(exc).__name__}: {exc}"
+        return self._format_error_detail(body)
+
+    async def _raise_for_ai_response(self, response: httpx.Response) -> None:
+        detail = self._format_error_detail(response.content)
+        self._raise_ai_status_error(response.status_code, detail)
+
+    def _format_error_detail(self, body: bytes) -> str:
         text = body.decode("utf-8", errors="replace").strip()
         if not text:
             return ""

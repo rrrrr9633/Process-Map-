@@ -186,7 +186,14 @@ async def _run_process_job(job_id: str, file_paths: list[str], mode: ProcessMode
         job_service.set_process_result(job_id, result.model_dump(mode="json"))
         job_service.complete(job_id)
     except Exception as exc:
-        job_service.fail(job_id, f"{type(exc).__name__}: {exc}")
+        error = f"{type(exc).__name__}: {exc}"
+        try:
+            current_job = job_service.get(job_id)
+            if current_job.ai_stream_chunks > 0:
+                error = f"AI 已返回 {current_job.ai_stream_chunks} 段内容，但结果解析或写入失败：{error}"
+        except Exception:
+            pass
+        job_service.fail(job_id, error)
 
 
 @router.post("/jobs/from-stored", response_model=ProcessJob)

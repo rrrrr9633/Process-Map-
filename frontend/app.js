@@ -1137,12 +1137,14 @@ async function saveAsCase() {
     const caseName = prompt('请输入案例名称：');
     if (!caseName) return;
     
+    const sourceFiles = collectCaseSourceFilesFromData(currentData);
     const caseData = {
+        start_annotation: sourceFiles.length > 0,
         case: {
             case_id: 'case_' + Date.now(),
             case_name: caseName,
             drawing_parse_result: currentData.parse_result,
-            source_files: collectCaseSourceFilesFromData(currentData),
+            source_files: sourceFiles,
             process_plan: currentData.process_plan,
             external_conditions: null,
             human_edits: [],
@@ -1166,7 +1168,10 @@ async function saveAsCase() {
         
         const result = await response.json();
         currentCaseId = result.case_id;
-        alert('案例保存成功！案例ID：' + result.case_id);
+        const annotationMessage = result.annotation_job
+            ? `\n精细标注：${result.annotation_job.message || result.annotation_job.status || '已启动'}`
+            : '\n精细标注：未启动';
+        alert('案例保存成功！案例ID：' + result.case_id + annotationMessage);
         switchTab('cases', document.querySelector('.tab[data-tab="cases"]'));
         await loadCase(result.case_id);
     } catch (error) {

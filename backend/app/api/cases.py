@@ -15,6 +15,7 @@ router = APIRouter(prefix="/cases", tags=["cases"])
 
 class SaveCaseRequest(BaseModel):
     case: ProcessCase
+    start_annotation: bool = True
 
 
 class UpdateCaseStatusRequest(BaseModel):
@@ -46,9 +47,18 @@ class SearchKnowledgeRequest(BaseModel):
 
 @router.post("/save")
 def save_case(request: SaveCaseRequest, background_tasks: BackgroundTasks) -> dict:
-    """保存工序案例，并在案例层启动精细标注后台任务。"""
+    """保存工序案例；只有保存案例且存在原始图纸文件时，才启动精细标注后台任务。"""
     case_id = case_service.save_case(request.case)
     annotation_job = None
+    source_files = [item for item in request.case.source_files if item.stored_name]
+    if not request.start_annotation:
+        return {"case_id": case_id, "message": "案例保存成功，未启动精细标注", "annotation_job": annotation_job}
+    if not source_files:
+        return {
+            "case_id": case_id,
+            "message": "案例保存成功，但没有绑定原始图纸文件，未启动精细标注",
+            "annotation_job": annotation_job,
+        }
     try:
         annotation_job = case_annotation_service.start_job(case_id)
         background_tasks.add_task(case_annotation_service.run_job, case_id, annotation_job["job_id"])
@@ -57,7 +67,7 @@ def save_case(request: SaveCaseRequest, background_tasks: BackgroundTasks) -> di
             "status": "failed_to_start",
             "message": f"案例已保存，但精细标注启动失败：{type(exc).__name__}: {exc}",
         }
-    return {"case_id": case_id, "message": "案例保存成功", "annotation_job": annotation_job}
+    return {"case_id": case_id, "message": "案例保存成功，已启动精细标注", "annotation_job": annotation_job}
 
 
 @router.get("/list")
