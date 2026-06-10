@@ -623,7 +623,9 @@ function requestWithUploadProgress(url, formData, startedAt, uploadInfo) {
 
 function resetGenerateButton(loading, generateButton) {
     stopGenerationProgressTimer();
-    loading.classList.remove('active');
+    if (loading) {
+        loading.classList.remove('active');
+    }
     isGeneratingProcess = false;
     if (generateButton) {
         generateButton.disabled = false;
@@ -1507,6 +1509,9 @@ async function downloadMarkdown() {
 
 // 清空表单
 function clearForm() {
+    const loading = document.getElementById('generate-loading');
+    const generateButton = document.getElementById('generate-process-btn');
+    resetGenerateButton(loading, generateButton);
     clearBoundCaseSourceFiles();
     document.getElementById('text-input').value = '';
     document.getElementById('json-input').value = '';

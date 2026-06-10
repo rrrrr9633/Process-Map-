@@ -5,12 +5,16 @@ from pathlib import Path
 from pydantic_settings import BaseSettings
 
 
+BASE_DIR = Path(__file__).resolve().parents[1]
+ENV_FILE = BASE_DIR / ".env"
+
+
 class Settings(BaseSettings):
     # AI 大模型配置
-    ai_model_provider: str = "deepseek"
+    ai_model_provider: str = "openai"
     ai_api_key: str = ""
-    ai_api_base: str = "https://api.deepseek.com/v1"
-    ai_model_name: str = "deepseek-chat"
+    ai_api_base: str = "http://new.zhushouzl.cloud/v1"
+    ai_model_name: str = "gpt-5.5"
     ai_timeout_seconds: float = 500
 
     # OCR 配置
@@ -19,10 +23,10 @@ class Settings(BaseSettings):
     ocr_api_secret: str = ""
 
     # 视觉识别配置
-    vision_provider: str = "none"
+    vision_provider: str = "openai"
     vision_api_key: str = ""
-    vision_api_base: str = ""
-    vision_model: str = ""
+    vision_api_base: str = "http://new.zhushouzl.cloud/v1"
+    vision_model: str = "gpt-5.5"
 
     # Agent 配置
     agent_enabled: bool = True
@@ -59,7 +63,7 @@ class Settings(BaseSettings):
         return [item.strip() for item in self.allowed_origins.split(",") if item.strip()]
 
     class Config:
-        env_file = ".env"
+        env_file = ENV_FILE
         case_sensitive = False
 
     def __init__(self, **kwargs):
