@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -87,7 +87,10 @@ def config_status() -> dict:
 @app.post("/config/model-profile")
 @app.post("/api/config/model-profile")
 def switch_model_profile(request: ModelProfileSwitchRequest) -> dict:
-    profile = model_profile_service.set_active_profile(request.profile_id)
+    try:
+        profile = model_profile_service.set_active_profile(request.profile_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         "message": "模型档案已切换",
         "active_profile": profile.profile_id,

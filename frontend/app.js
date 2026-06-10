@@ -29,6 +29,7 @@ document.addEventListener('DOMContentLoaded', () => {
     mermaid.initialize({ startOnLoad: false, theme: 'default' });
     checkExternalConditionsCheckbox();
     bindFileUploadPreview();
+    bindModelProfileSwitcher();
     loadConfigStatus();
 });
 
@@ -165,7 +166,10 @@ function renderResultModule(title, body, { open = false, className = '' } = {}) 
     if (!body) return '';
     return `
         <details class="result-section result-module ${className}" ${open ? 'open' : ''}>
-            <summary>${escapeHtml(title)}</summary>
+            <summary>
+                <span>${escapeHtml(title)}</span>
+                <small class="result-module-toggle"></small>
+            </summary>
             <div class="result-module-body">${body}</div>
         </details>
     `;
@@ -514,10 +518,14 @@ async function loadConfigStatus() {
 
 async function switchModelProfile() {
     const select = document.getElementById('model-profile-select');
+    const button = document.getElementById('model-profile-switch-btn');
+    const statusNode = document.getElementById('model-profile-switch-status');
     if (!select || !select.value) {
-        alert('请选择模型档案');
+        if (statusNode) statusNode.textContent = '请选择模型档案。';
         return;
     }
+    if (button) button.disabled = true;
+    if (statusNode) statusNode.textContent = '正在切换模型档案...';
     try {
         const response = await fetch(`${API_BASE}/config/model-profile`, {
             method: 'POST',
@@ -526,11 +534,20 @@ async function switchModelProfile() {
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
         const result = await response.json();
-        alert(`已切换到：${result.active?.label || result.active_profile}`);
+        if (statusNode) statusNode.textContent = `已切换到：${result.active?.label || result.active_profile}`;
         await loadConfigStatus();
     } catch (error) {
-        alert('模型切换失败：' + error.message);
+        if (statusNode) statusNode.textContent = `模型切换失败：${error.message}`;
+    } finally {
+        if (button) button.disabled = false;
     }
+}
+
+function bindModelProfileSwitcher() {
+    const button = document.getElementById('model-profile-switch-btn');
+    if (!button || button.dataset.bound === 'true') return;
+    button.dataset.bound = 'true';
+    button.addEventListener('click', switchModelProfile);
 }
 
 
@@ -1318,6 +1335,7 @@ function renderOperationDetail(op, index) {
 function renderProcessPlanModule(plan) {
     const operations = plan.operations || [];
     let html = `<p><strong>模式：</strong>${plan.mode === 'standard_8' ? '标准8道工序' : '详细工序'}</p>`;
+    html += '<div class="info">点击每道工序标题行可展开或收起具体操作、设备、检验项和图纸依据。</div>';
     if (plan.validation_issues && plan.validation_issues.length > 0) {
         html += '<h4>验证问题</h4>';
         plan.validation_issues.forEach(issue => {
@@ -1347,6 +1365,7 @@ function renderFlowModule(data, flow) {
     if (data.loaded_case_name) {
         html += `<div class="info"><strong>案例来源：</strong>${escapeHtml(data.loaded_case_name)}。当前案例已加载为输入来源；如已绑定图纸，点击“生成工序方案”会复用对应 uploads 文件重新生成。</div>`;
     }
+    html += '<div class="info">这里是默认展开的图文对照流程；点击单道工序标题可查看或收起细节。</div>';
     html += renderProcessOverview(data.process_plan.operations || []);
     html += renderReadableFlow(data.process_plan.operations || []);
     return html;

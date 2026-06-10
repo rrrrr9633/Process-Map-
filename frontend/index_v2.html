@@ -148,8 +148,9 @@
                         <div class="model-switcher">
                             <label for="model-profile-select">当前大模型</label>
                             <select id="model-profile-select"></select>
-                            <button class="btn btn-sm" onclick="switchModelProfile()">切换模型</button>
+                            <button class="btn btn-sm" id="model-profile-switch-btn" type="button">切换模型</button>
                         </div>
+                        <div id="model-profile-switch-status" class="help-text">选择模型档案后点击切换。</div>
                         <div id="settings-detail" class="help-text">正在读取后端配置状态...</div>
                     </div>
                 </div>
@@ -157,6 +158,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=20260610-11"></script>
+    <script src="app.js?v=20260610-13"></script>
 </body>
 </html>
