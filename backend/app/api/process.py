@@ -230,6 +230,15 @@ def get_process_job(job_id: str) -> ProcessJob:
         return job_service.get(job_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="任务不存在")
+    except Exception as exc:
+        return ProcessJob(
+            job_id=job_id,
+            stage="failed",
+            status="failed",
+            progress=100,
+            message="任务状态读取失败",
+            error=f"{type(exc).__name__}: {exc}",
+        )
 
 
 @router.post("/generate-from-text", response_model=ProcessGenerationResponse)

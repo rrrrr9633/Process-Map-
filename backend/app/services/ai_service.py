@@ -535,7 +535,7 @@ class AIService:
             body = await response.aread()
         except Exception:
             body = b""
-        text = body.decode(response.encoding or "utf-8", errors="replace").strip()
+        text = body.decode("utf-8", errors="replace").strip()
         if not text:
             return ""
         compact = " ".join(text.split())

@@ -253,7 +253,7 @@ function getGenerationProgressItems(extraItems = []) {
         { key: 'upload', label: '文件上传', value: '正在把图纸文件发送到后端' },
         { key: 'backend', label: '等待后端创建任务', value: '文件已上传，等待后端返回任务 ID' },
         { key: 'uploaded', label: '任务已创建', value: '后端已接收文件并创建任务' },
-        { key: 'flow_generating', label: '快速工序生成', value: '后端正在快速生成豆包式工序方案' },
+        { key: 'flow_generating', label: '快速工序生成', value: '后端正在快速生成工序方案' },
         { key: 'failed', label: '失败处理', value: '后端任务失败后停留在当前页并展示失败原因' },
         { key: 'completed', label: '结果返回', value: '后端任务完成并返回工序方案' },
     ];
@@ -793,7 +793,7 @@ async function generateProcess() {
         result.innerHTML = '';
         const failureItems = [
             { key: 'failed-reason', label: '失败原因', value: error.message },
-            { key: 'suggestion', label: '处理建议', value: '504 是 AI 网关首段响应超时。需要调大 new-api 网关超时，或减少单次图纸/图片输入；失败后不会保留上一次结果。' },
+            { key: 'suggestion', label: '处理建议', value: '待定' },
         ];
         if (lastJob?.job_id) {
             failureItems.unshift({ key: 'job-id', label: '任务 ID', value: lastJob.job_id });
