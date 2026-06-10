@@ -29,6 +29,10 @@ class CaseAnnotationService:
         case = case_service.load_case(case_id)
         if not case:
             raise FileNotFoundError(case_id)
+        latest_job = self.get_latest_job(case_id)
+        if latest_job and latest_job.get("status") in {"pending", "running"}:
+            latest_job["reused"] = True
+            return latest_job
         job_id = uuid4().hex
         record = CaseAnnotationJobRecord(
             job_id=job_id,
@@ -43,11 +47,14 @@ class CaseAnnotationService:
         with SessionLocal() as session:
             session.add(record)
             session.commit()
-        return self.job_to_dict(record)
+        result = self.job_to_dict(record)
+        result["reused"] = False
+        return result
 
     async def run_job(self, case_id: str, job_id: str) -> None:
         completed = 0
         stage = "queued"
+        explanations: list[DrawingExplanation] = []
         try:
             case = case_service.load_case(case_id)
             if not case:
@@ -57,6 +64,7 @@ class CaseAnnotationService:
                 raise RuntimeError("案例没有绑定可复用的 uploads 图纸文件")
 
             total = len(paths)
+            existing_by_index = self._load_saved_explanations_by_index(case_id)
             self.update_job(
                 job_id,
                 status="running",
@@ -65,9 +73,22 @@ class CaseAnnotationService:
                 message=f"精细标注已启动：共 {total} 份图纸",
             )
 
-            explanations: list[DrawingExplanation] = []
             for index, path in enumerate(paths, start=1):
                 stage = "explaining"
+                existing_explanation = existing_by_index.get(index)
+                if existing_explanation and self._matches_path(existing_explanation, path, index):
+                    explanations.append(existing_explanation)
+                    completed = index
+                    self.update_job(
+                        job_id,
+                        status="running",
+                        stage="explaining",
+                        progress=10 + int(index / total * 60),
+                        message=f"跳过第 {index}/{total} 份图纸：已有精细标注结果",
+                        ai_stream_preview="",
+                        ai_stream_chunks=0,
+                    )
+                    continue
 
                 def on_stream_delta(delta: str, chunk_count: int, content: str, file_index=index) -> None:
                     self.update_job(
@@ -137,6 +158,19 @@ class CaseAnnotationService:
                 ai_stream_preview="",
             )
         except Exception as exc:
+            if explanations:
+                try:
+                    partial_explanations = [
+                        bubble_diagram_service.generate(explanation, self.bubbles_dir(case_id, job_id))
+                        for explanation in explanations
+                    ]
+                    csv_path, _ = self.export_service.export_annotations(
+                        partial_explanations,
+                        self.exports_dir(case_id, job_id),
+                    )
+                    self.save_result(case_id, job_id, partial_explanations, f"exports/{csv_path.name}")
+                except Exception as save_exc:
+                    print(f"[case-annotation] partial result save failed: {type(save_exc).__name__}: {save_exc}", flush=True)
             self.update_job(
                 job_id,
                 status="failed",
@@ -206,6 +240,32 @@ class CaseAnnotationService:
                 )
             session.commit()
 
+    def _load_saved_explanations_by_index(self, case_id: str) -> dict[int, DrawingExplanation]:
+        result = self.get_result(case_id)
+        if not result:
+            return {}
+        explanations: dict[int, DrawingExplanation] = {}
+        for item in result.get("explanations") or []:
+            try:
+                explanation = DrawingExplanation.model_validate(item)
+            except Exception:
+                continue
+            if self._has_usable_result(explanation):
+                explanations[explanation.file_index] = explanation
+        return explanations
+
+    def _has_usable_result(self, explanation: DrawingExplanation) -> bool:
+        return bool(
+            explanation.page_explanations
+            or explanation.visual_summary
+            or explanation.annotation_result.annotations
+        )
+
+    def _matches_path(self, explanation: DrawingExplanation, path: Path, index: int) -> bool:
+        if explanation.file_index != index:
+            return False
+        return Path(explanation.source_path).name == path.name or explanation.file_name == path.name
+
     def update_job(self, job_id: str, **updates) -> None:
         try:
             with SessionLocal() as session:
@@ -216,7 +276,7 @@ class CaseAnnotationService:
                     if value is None:
                         continue
                     if key == "ai_stream_preview":
-                        value = str(value)[-3000:]
+                        value = str(value)[-500:]
                     setattr(record, key, value)
                 record.updated_at = datetime.utcnow()
                 session.commit()

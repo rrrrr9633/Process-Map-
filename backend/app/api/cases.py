@@ -61,7 +61,8 @@ def save_case(request: SaveCaseRequest, background_tasks: BackgroundTasks) -> di
         }
     try:
         annotation_job = case_annotation_service.start_job(case_id)
-        background_tasks.add_task(case_annotation_service.run_job, case_id, annotation_job["job_id"])
+        if not annotation_job.get("reused"):
+            background_tasks.add_task(case_annotation_service.run_job, case_id, annotation_job["job_id"])
     except Exception as exc:
         annotation_job = {
             "status": "failed_to_start",
@@ -154,7 +155,8 @@ async def start_case_annotation(case_id: str, background_tasks: BackgroundTasks)
         job = case_annotation_service.start_job(case_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="案例不存在")
-    background_tasks.add_task(case_annotation_service.run_job, case_id, job["job_id"])
+    if not job.get("reused"):
+        background_tasks.add_task(case_annotation_service.run_job, case_id, job["job_id"])
     return job
 
 
@@ -170,7 +172,8 @@ async def retry_case_annotation(case_id: str, background_tasks: BackgroundTasks)
         job = case_annotation_service.start_job(case_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="案例不存在")
-    background_tasks.add_task(case_annotation_service.run_job, case_id, job["job_id"])
+    if not job.get("reused"):
+        background_tasks.add_task(case_annotation_service.run_job, case_id, job["job_id"])
     return job
 
 

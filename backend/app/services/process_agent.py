@@ -31,6 +31,7 @@ class ProcessAgent:
         self,
         file_path: str | Path,
         mode: ProcessMode = ProcessMode.STANDARD_8,
+        target_operation_count: int = 15,
     ) -> AgentProcessResponse:
         path = Path(file_path)
         trace = AgentRunTrace(goal=settings.agent_goal)
@@ -60,6 +61,7 @@ class ProcessAgent:
             pdf_text=parse_result.raw_text or "",
             image_payloads=image_payloads,
             mode=mode.value,
+            target_operation_count=target_operation_count,
         )
         trace.used_ai = True
         trace.used_vision = bool(image_payloads)
@@ -71,8 +73,9 @@ class ProcessAgent:
         mode: ProcessMode = ProcessMode.STANDARD_8,
         explanations: list[DrawingExplanation] | None = None,
         on_stream_delta: Any | None = None,
+        target_operation_count: int = 15,
     ) -> AgentProcessResponse:
-        trace = AgentRunTrace(goal=f"{settings.agent_goal}，并合并多份分步图纸为工人生产指导流程")
+        trace = AgentRunTrace(goal=f"{settings.agent_goal}，前台只生成约 {target_operation_count} 道轻量工序")
         trace.stages.append(f"接收分步图纸 {len(file_paths)} 份")
 
         parse_results: list[DrawingParseResult] = []
@@ -121,6 +124,7 @@ class ProcessAgent:
             pdf_text=parse_result.raw_text or "",
             image_payloads=image_payloads,
             mode=mode.value,
+            target_operation_count=target_operation_count,
             per_file_explanations=per_file_explanations,
             on_stream_delta=on_stream_delta,
         )
@@ -139,6 +143,7 @@ class ProcessAgent:
         self,
         text: str,
         mode: ProcessMode = ProcessMode.STANDARD_8,
+        target_operation_count: int = 15,
     ) -> AgentProcessResponse:
         trace = AgentRunTrace(goal=settings.agent_goal)
         trace.stages.append("接收图纸文字")
@@ -155,6 +160,7 @@ class ProcessAgent:
             pdf_text=text,
             image_payloads=[],
             mode=mode.value,
+            target_operation_count=target_operation_count,
         )
         trace.used_ai = True
         return self._build_agent_response(payload, parse_result, trace, mode)

@@ -36,6 +36,7 @@ class ArchiveResponse(BaseModel):
 class FromStoredJobRequest(BaseModel):
     stored_names: list[str]
     mode: ProcessMode = ProcessMode.STANDARD_8
+    target_operation_count: int = 15
 
 
 SUPPORTED_UPLOAD_SUFFIXES = {"pdf", "png", "jpg", "jpeg", "webp", "bmp", "dwg", "dxf"}
@@ -123,11 +124,17 @@ async def _apply_ai_enhancement(
 async def _run_sync_explanation_pipeline(
     file_paths: list[str],
     mode: ProcessMode,
+    target_operation_count: int = 15,
 ) -> tuple[str, list[DrawingExplanation], ProcessGenerationResponse]:
     """同步兼容接口：只生成快速工序层；精细图解、气泡图和标注全部移入案例后台。"""
     job = job_service.create_job(file_paths)
     job_id = job.job_id
-    agent_response = await process_agent.run_from_files(file_paths, mode, explanations=None)
+    agent_response = await process_agent.run_from_files(
+        file_paths,
+        mode,
+        explanations=None,
+        target_operation_count=target_operation_count,
+    )
     result = ProcessGenerationResponse(
         parse_result=agent_response.parse_result,
         annotation_result=agent_response.annotation_result,
@@ -143,7 +150,12 @@ async def _run_sync_explanation_pipeline(
     job_service.complete(job_id)
     return job_id, [], result
 
-async def _run_process_job(job_id: str, file_paths: list[str], mode: ProcessMode) -> None:
+async def _run_process_job(
+    job_id: str,
+    file_paths: list[str],
+    mode: ProcessMode,
+    target_operation_count: int = 15,
+) -> None:
     try:
         total = max(1, len(file_paths))
         job_service.update(
@@ -157,7 +169,7 @@ async def _run_process_job(job_id: str, file_paths: list[str], mode: ProcessMode
         )
 
         def on_flow_stream_delta(delta: str, chunk_count: int, content: str) -> None:
-            progress = min(95, 10 + chunk_count // 6)
+            progress = min(85, 10 + chunk_count // 20)
             job_service.update(
                 job_id,
                 stage="flow_generating",
@@ -173,6 +185,7 @@ async def _run_process_job(job_id: str, file_paths: list[str], mode: ProcessMode
             mode,
             explanations=None,
             on_stream_delta=on_flow_stream_delta,
+            target_operation_count=target_operation_count,
         )
         result = ProcessGenerationResponse(
             parse_result=agent_response.parse_result,
@@ -210,7 +223,13 @@ async def create_job_from_stored(
         flush=True,
     )
     job = job_service.create_job(path_strings)
-    background_tasks.add_task(_run_process_job, job.job_id, path_strings, request.mode)
+    background_tasks.add_task(
+        _run_process_job,
+        job.job_id,
+        path_strings,
+        request.mode,
+        request.target_operation_count,
+    )
     return job
 
 
@@ -219,6 +238,7 @@ async def upload_batch_job(
     background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
     mode: ProcessMode = ProcessMode.STANDARD_8,
+    target_operation_count: int = 15,
 ) -> ProcessJob:
     if not files:
         raise HTTPException(status_code=400, detail="请至少上传 1 个图纸文件")
@@ -227,7 +247,13 @@ async def upload_batch_job(
     upload_dir.mkdir(exist_ok=True, parents=True)
     temp_paths = [await _store_upload(file, upload_dir) for file in files]
     job = job_service.create_job([str(path) for path in temp_paths])
-    background_tasks.add_task(_run_process_job, job.job_id, [str(path) for path in temp_paths], mode)
+    background_tasks.add_task(
+        _run_process_job,
+        job.job_id,
+        [str(path) for path in temp_paths],
+        mode,
+        target_operation_count,
+    )
     return job
 
 
@@ -250,7 +276,11 @@ def get_process_job(job_id: str) -> ProcessJob:
 
 @router.post("/generate-from-text", response_model=ProcessGenerationResponse)
 async def generate_from_text(request: GenerateFromTextRequest) -> ProcessGenerationResponse:
-    agent_response = await process_agent.run_from_text(request.text, request.mode)
+    agent_response = await process_agent.run_from_text(
+        request.text,
+        request.mode,
+        target_operation_count=request.target_operation_count,
+    )
     return ProcessGenerationResponse(
         parse_result=agent_response.parse_result,
         annotation_result=agent_response.annotation_result,
@@ -306,13 +336,14 @@ async def generate_from_parse(request: GenerateFromParseRequest) -> ProcessGener
 async def upload_and_generate(
     file: UploadFile,
     mode: ProcessMode = ProcessMode.STANDARD_8,
+    target_operation_count: int = 15,
     use_ai_enhancement: bool = False,
 ) -> ProcessGenerationResponse:
     upload_dir = UPLOADS_DIR
     upload_dir.mkdir(exist_ok=True, parents=True)
     temp_path = await _store_upload(file, upload_dir)
 
-    _, _, result = await _run_sync_explanation_pipeline([str(temp_path)], mode)
+    _, _, result = await _run_sync_explanation_pipeline([str(temp_path)], mode, target_operation_count)
     return result
 
 
@@ -320,6 +351,7 @@ async def upload_and_generate(
 async def upload_batch_and_generate(
     files: list[UploadFile] = File(...),
     mode: ProcessMode = ProcessMode.STANDARD_8,
+    target_operation_count: int = 15,
     use_ai_enhancement: bool = False,
 ) -> ProcessGenerationResponse:
     if not files:
@@ -330,7 +362,11 @@ async def upload_batch_and_generate(
 
     temp_paths = [await _store_upload(file, upload_dir) for file in files]
 
-    _, _, result = await _run_sync_explanation_pipeline([str(path) for path in temp_paths], mode)
+    _, _, result = await _run_sync_explanation_pipeline(
+        [str(path) for path in temp_paths],
+        mode,
+        target_operation_count,
+    )
     return result
 
 
@@ -338,8 +374,14 @@ async def upload_batch_and_generate(
 async def agent_upload_and_generate(
     file: UploadFile,
     mode: ProcessMode = ProcessMode.STANDARD_8,
+    target_operation_count: int = 15,
 ) -> ProcessGenerationResponse:
-    return await upload_and_generate(file=file, mode=mode, use_ai_enhancement=True)
+    return await upload_and_generate(
+        file=file,
+        mode=mode,
+        target_operation_count=target_operation_count,
+        use_ai_enhancement=True,
+    )
 
 
 @router.post("/archive", response_model=ArchiveResponse)

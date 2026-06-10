@@ -16,6 +16,7 @@ from app.models.process import ProcessMode, ProcessPlan
 class GenerateFromTextRequest(BaseModel):
     text: str
     mode: ProcessMode = ProcessMode.STANDARD_8
+    target_operation_count: int = Field(default=15, ge=1, le=60)
     external_conditions: Optional[ExternalConditions] = None
     use_ai_enhancement: bool = False
 
@@ -23,6 +24,7 @@ class GenerateFromTextRequest(BaseModel):
 class GenerateFromParseRequest(BaseModel):
     parse_result: DrawingParseResult
     mode: ProcessMode = ProcessMode.STANDARD_8
+    target_operation_count: int = Field(default=15, ge=1, le=60)
     external_conditions: Optional[ExternalConditions] = None
     use_ai_enhancement: bool = False
 
@@ -44,4 +46,3 @@ class ProcessGenerationResponse(BaseModel):
     agent_trace: Optional[AgentRunTrace] = None
     job_id: Optional[str] = None
     explanations: List[DrawingExplanation] = Field(default_factory=list)
-

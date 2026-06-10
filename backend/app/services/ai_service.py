@@ -77,6 +77,7 @@ class AIService:
         pdf_text: str,
         image_payloads: list[dict[str, str]],
         mode: str,
+        target_operation_count: int = 15,
         per_file_explanations: list[dict[str, Any]] | None = None,
         on_stream_delta: Any | None = None,
     ) -> dict[str, Any]:
@@ -90,6 +91,7 @@ class AIService:
                     {
                         "goal": goal,
                         "mode": mode,
+                        "target_operation_count": target_operation_count,
                         "pdf_text": pdf_text[: settings.agent_max_pdf_text_chars],
                         "image_count": len(image_payloads),
                         "per_file_explanations": per_file_explanations or [],
@@ -97,11 +99,13 @@ class AIService:
                         "rules": [
                             "优先根据 PDF 图片中的真实结构、标注、技术要求拆分流程，不要套固定模板。",
                             "如果图片或文字证据不足，必须在 questions 中提出人工确认项。",
-                            "工序数量按复杂度动态决定，不强制 8 或 10 道。",
-                            "每道工序必须说明 drawing_basis，标明来自图片观察、PDF文字或工艺推理。",
-                            "每道工序必须输出 worker_steps、materials、tools、setup_requirements、safety_points、quality_gates、handoff_requirements，保证工人能按步骤生产。",
+                            f"前台快速生成只输出约 {target_operation_count} 道轻量工序；除非图纸证据强烈，不要大幅偏离该数量。",
+                            "优先使用图纸中的 OP 编号；没有 OP 编号时按生产顺序生成 OP05/OP10 等编号。",
+                            "每道工序只保留工序编号、工序名称、工序内容、核心参数、质控点和简要图纸依据；不要展开精细标注表。",
+                            "worker_steps、materials、tools、setup_requirements、safety_points、quality_gates、handoff_requirements 均保持简短，最多 3 项。",
                             "流程边 edges 必须表达实际先后关系；如有并行、返修、人工确认，也要输出对应关系。",
                             "只返回 JSON，不要返回 Markdown。",
+                            "annotation_result 必须返回空 annotations/export_rows；精细注解、气泡图和标注导出只在保存案例后的精细标注后台执行。",
                             "若提供 per_file_explanations，必须结合每份图纸、每页的图解结论拆分流程，并在 drawing_basis 中引用 file_index/page。",
                         ],
                     },
@@ -361,42 +365,10 @@ class AIService:
                 "raw_text": "关键原文或图片观察摘要",
             },
             "annotation_result": {
-                "annotations": [
-                    {
-                        "annotation_id": "A001",
-                        "label": "气泡编号或标注编号",
-                        "region": {"page": 1, "x": 0.1, "y": 0.2, "width": 0.08, "height": 0.04, "unit": "ratio"},
-                        "raw_text": "图纸原始标注内容",
-                        "normalized_text": "归一化标注内容",
-                        "parameter_name": "参数名",
-                        "parameter_value": "参数值",
-                        "upper_limit": "上限",
-                        "lower_limit": "下限",
-                        "unit": "单位",
-                        "semantic_type": "dimension|tolerance|roughness|datum|geometric_tolerance|material|process_note|inspection_note|quality_note|unknown",
-                        "source": "pdf_page_image|pdf_embedded_image|pdf_text|agent_reasoning",
-                        "confidence": 0.8,
-                        "review_status": "pending|accepted|rejected|needs_manual_review",
-                        "review_reason": "需要审核的原因",
-                    }
-                ],
-                "export_rows": [
-                    {
-                        "row_no": 1,
-                        "annotation_id": "A001",
-                        "parameter_name": "参数名",
-                        "parameter_value": "参数值",
-                        "upper_limit": "上限",
-                        "lower_limit": "下限",
-                        "unit": "单位",
-                        "semantic_type": "dimension",
-                        "review_status": "pending",
-                        "source": "pdf_page_image",
-                        "confidence": 0.8,
-                    }
-                ],
+                "annotations": [],
+                "export_rows": [],
                 "bubble_diagram_available": False,
-                "review_required_count": 1,
+                "review_required_count": 0,
             },
             "process_plan": {
                 "title": "流程标题",

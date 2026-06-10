@@ -74,11 +74,9 @@
                     <h3>生成选项</h3>
                     <div class="form-row">
                         <div class="form-col">
-                            <label>工序模式：</label>
-                            <select id="process-mode">
-                                <option value="standard_8">标准8道工序</option>
-                                <option value="detailed_10">详细10道工序</option>
-                            </select>
+                            <label>目标工序数：</label>
+                            <input type="number" id="target-operation-count" min="1" max="60" value="15">
+                            <input type="hidden" id="process-mode" value="standard_8">
                         </div>
                     </div>
                 </div>

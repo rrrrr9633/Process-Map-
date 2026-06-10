@@ -222,11 +222,11 @@ function collectCaseSourceFilesFromData(data) {
     return files;
 }
 
-async function startJobFromStoredFiles(storedNames, mode, startedAt, uploadInfo) {
+async function startJobFromStoredFiles(storedNames, mode, targetOperationCount, startedAt, uploadInfo) {
     const response = await fetch(`${API_BASE}/process/jobs/from-stored`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stored_names: storedNames, mode }),
+        body: JSON.stringify({ stored_names: storedNames, mode, target_operation_count: targetOperationCount }),
     });
     if (!response.ok) {
         const errorText = await response.text();
@@ -488,7 +488,7 @@ async function pollProcessJob(jobId, startedAt, uploadInfo) {
         const jobDetail = isFailed
             ? `失败原因：${job.error || job.message || '任务失败'}；未生成可用工序结果。`
             : aiPreview
-                ? `阶段：${job.stage}；进度：${job.progress || 0}%；${job.ai_stream_chunks ? '正在接收 AI 输出' : '正在等待 AI 首段返回'}。`
+                ? `阶段：${job.stage}；AI 已返回 ${job.ai_stream_chunks || 0} 段内容，正在等待完整结果。`
                 : `阶段：${job.stage}；进度：${job.progress || 0}%。`;
         setGenerationProgress(
             job.message || (isFailed ? '任务失败' : '任务处理中'),
@@ -590,6 +590,7 @@ async function generateProcess() {
 
     const method = document.getElementById('input-method').value;
     const mode = document.getElementById('process-mode').value;
+    const targetOperationCount = Math.max(1, Math.min(60, Number(document.getElementById('target-operation-count')?.value || 15)));
     const useExternalConditions = document.getElementById('use-external-conditions').checked;
     
     const loading = document.getElementById('generate-loading');
@@ -607,7 +608,7 @@ async function generateProcess() {
     result.classList.remove('active');
     startGenerationProgressTimer(
         '准备生成工序',
-        `输入方式：${method}；工序模式：${mode}`,
+        `输入方式：${method}；目标工序数：${targetOperationCount}`,
         startedAt,
         [],
         'request',
@@ -619,6 +620,7 @@ async function generateProcess() {
     
     let requestData = {
         mode,
+        target_operation_count: targetOperationCount,
     };
     
     // 外部条件
@@ -692,7 +694,7 @@ async function generateProcess() {
                     ],
                     'backend',
                 );
-                job = await startJobFromStoredFiles(boundCaseSourceFiles, mode, startedAt, uploadInfo);
+                job = await startJobFromStoredFiles(boundCaseSourceFiles, mode, targetOperationCount, startedAt, uploadInfo);
             } else {
                 const files = selectedFiles;
                 const supportedSuffixes = ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'bmp', 'dwg', 'dxf'];
@@ -725,7 +727,7 @@ async function generateProcess() {
                     'upload',
                 );
                 job = await uploadWithJobProgress(
-                    `${API_BASE}${endpoint}?mode=${mode}`,
+                    `${API_BASE}${endpoint}?mode=${mode}&target_operation_count=${targetOperationCount}`,
                     formData,
                     startedAt,
                     uploadInfo,
@@ -1336,7 +1338,8 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult) {
     html += `<p><strong>绑定图纸：</strong>${sourceFiles.length ? sourceFiles.map(item => escapeHtml(item.original_name || item.stored_name)).join('、') : '未绑定'}</p>`;
     html += '</div>';
     html += '<div style="margin-top:10px;">';
-    html += `<button class="btn btn-primary" onclick="loadCaseToAnalysis('${escapeHtml(caseData.case_id)}')">加载到分析台</button>`;
+    html += `<button class="btn btn-primary" onclick="loadCaseForEdit('${escapeHtml(caseData.case_id)}')">编辑工序</button>`;
+    html += `<button class="btn btn-secondary" onclick="loadCaseToAnalysis('${escapeHtml(caseData.case_id)}')">重新生成工序</button>`;
     html += `<button class="btn btn-secondary" onclick="startCaseAnnotation('${escapeHtml(caseData.case_id)}')">${status.status === 'failed' ? '重试精细标注' : '启动/刷新精细标注'}</button>`;
     html += '</div>';
     html += '</div>';
@@ -1346,7 +1349,7 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult) {
     html += `<div class="info"><strong>状态：</strong>${escapeHtml(status.status || 'not_started')} / ${escapeHtml(status.stage || 'not_started')}，进度 ${Number(status.progress || 0)}%</div>`;
     html += `<div class="info"><strong>说明：</strong>${escapeHtml(status.message || '')}</div>`;
     if (status.ai_stream_preview) {
-        html += `<pre class="raw-text-preview">${escapeHtml(status.ai_stream_preview)}</pre>`;
+        html += `<div class="info"><strong>AI 状态：</strong>${escapeHtml(String(status.ai_stream_preview).slice(-180))}</div>`;
     }
     if (status.error_message) {
         html += `<div class="critical"><strong>${escapeHtml(status.error_type || 'Error')}：</strong>${escapeHtml(status.error_message)}</div>`;
@@ -1362,7 +1365,7 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult) {
         if (annotationResult.export_csv_url) {
             html += `<p><a class="btn btn-sm" href="${API_BASE}/cases/${encodeURIComponent(caseData.case_id)}/annotations/assets/${encodeURIComponent(annotationResult.job_id)}/${annotationResult.export_csv_url}" target="_blank">下载标注 CSV</a></p>`;
         }
-        explanations.forEach(explanation => {
+        explanations.slice(0, 6).forEach(explanation => {
             html += `<div class="operation-card">`;
             html += `<div class="operation-header"><span class="operation-no">${escapeHtml(explanation.file_index)}</span><span class="operation-name">${escapeHtml(explanation.file_name)}</span></div>`;
             html += `<p>${escapeHtml(explanation.visual_summary || '暂无图解摘要')}</p>`;
@@ -1371,7 +1374,7 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult) {
                 const bubble = page.bubble_asset || explanation.bubble_asset;
                 html += `<div class="info"><strong>第 ${escapeHtml(page.page || 1)} 页：</strong>${escapeHtml(page.visual_summary || '')}</div>`;
                 if (bubble?.image_url) {
-                    html += `<div style="margin:10px 0;"><img src="${API_BASE}/cases/${encodeURIComponent(caseData.case_id)}/annotations/assets/${encodeURIComponent(annotationResult.job_id)}/${bubble.image_url}" style="max-width:100%; border:1px solid #ddd; border-radius:8px;"></div>`;
+                    html += `<p><a class="btn btn-sm" href="${API_BASE}/cases/${encodeURIComponent(caseData.case_id)}/annotations/assets/${encodeURIComponent(annotationResult.job_id)}/${bubble.image_url}" target="_blank">打开气泡图</a></p>`;
                 }
                 const annotations = page.annotation_result?.annotations || [];
                 if (annotations.length) {
@@ -1380,6 +1383,9 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult) {
             });
             html += '</div>';
         });
+        if (explanations.length > 6) {
+            html += `<div class="info">已隐藏 ${explanations.length - 6} 份图纸的页面预览；完整标注请下载 CSV 或逐项打开气泡图。</div>`;
+        }
         html += '</div>';
     }
 
@@ -1399,7 +1405,7 @@ async function refreshCaseAnnotation(caseId, caseData = null) {
     const statusResponse = await fetch(`${API_BASE}/cases/${encodeURIComponent(caseId)}/annotations/status`);
     const status = statusResponse.ok ? await statusResponse.json() : { status: 'not_started', progress: 0, message: '尚未启动精细标注' };
     let result = null;
-    if (String(status.status || '').toLowerCase() === 'completed') {
+    if (['completed', 'failed'].includes(String(status.status || '').toLowerCase())) {
         const resultResponse = await fetch(`${API_BASE}/cases/${encodeURIComponent(caseId)}/annotations/result`);
         if (resultResponse.ok) result = await resultResponse.json();
     }
@@ -1416,6 +1422,27 @@ async function startCaseAnnotation(caseId) {
         await refreshCaseAnnotation(caseId);
     } catch (error) {
         alert('启动精细标注失败：' + error.message);
+    }
+}
+
+async function loadCaseForEdit(caseId) {
+    try {
+        const response = await fetch(`${API_BASE}/cases/${encodeURIComponent(caseId)}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const caseData = await response.json();
+        currentCaseId = caseData.case_id;
+        currentData = {
+            loaded_case_name: caseData.case_name,
+            parse_result: caseData.drawing_parse_result,
+            process_plan: caseData.process_plan,
+            flow: { title: `案例流程：${caseData.case_name}`, mermaid: '' },
+            similar_cases: [],
+            ai_suggestions: [],
+        };
+        displayResult(currentData);
+        editCurrentPlan();
+    } catch (error) {
+        alert('加载案例到编辑工序失败：' + error.message);
     }
 }
 
