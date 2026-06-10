@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, create_engine
+from sqlalchemy import DateTime, Integer, String, Text, create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from app.config import settings
@@ -60,7 +61,7 @@ class CaseAnnotationResultRecord(Base):
 
     case_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     job_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    explanations_json: Mapped[str] = mapped_column(Text, nullable=False)
+    explanations_json: Mapped[str] = mapped_column(LONGTEXT().with_variant(Text, "sqlite"), nullable=False)
     export_csv_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
@@ -72,5 +73,13 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expi
 def init_db() -> None:
     try:
         Base.metadata.create_all(bind=engine)
+        if engine.dialect.name == "mysql":
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE case_annotation_results "
+                        "MODIFY explanations_json LONGTEXT NOT NULL"
+                    )
+                )
     except SQLAlchemyError as exc:
         print(f"[db] mysql init failed: {type(exc).__name__}: {exc}", flush=True)

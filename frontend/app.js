@@ -1273,7 +1273,7 @@ async function refreshCaseAnnotationSummary(caseId) {
             : rawStatus === 'failed' ? '#c62828'
             : ['pending', 'running'].includes(rawStatus) ? '#ef6c00'
             : '#777';
-        target.innerHTML = `<span class="badge" style="background:${color};">精细标注：${escapeHtml(rawStatus)} ${Number(status.progress || 0)}%</span> <small>${escapeHtml(status.message || '')}</small>`;
+        target.innerHTML = `<span class="badge" style="background:${color};">精细标注：${escapeHtml(rawStatus)}</span> <small>${escapeHtml(status.message || '')}</small>`;
     } catch (error) {
         target.innerHTML = `<span class="badge" style="background:#999;">精细标注：未知</span>`;
     }
@@ -1346,7 +1346,7 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult) {
 
     html += '<div class="result-section">';
     html += '<h3>案例精细标注</h3>';
-    html += `<div class="info"><strong>状态：</strong>${escapeHtml(status.status || 'not_started')} / ${escapeHtml(status.stage || 'not_started')}，进度 ${Number(status.progress || 0)}%</div>`;
+    html += `<div class="info"><strong>状态：</strong>${escapeHtml(status.status || 'not_started')} / ${escapeHtml(status.stage || 'not_started')}</div>`;
     html += `<div class="info"><strong>说明：</strong>${escapeHtml(status.message || '')}</div>`;
     if (status.ai_stream_preview) {
         html += `<div class="info"><strong>AI 状态：</strong>${escapeHtml(String(status.ai_stream_preview).slice(-180))}</div>`;
