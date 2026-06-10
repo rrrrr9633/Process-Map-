@@ -109,6 +109,8 @@ function getUploadSupportNote(suffix) {
     if (suffix === 'pdf') return 'PDF 将作为快速工序生成输入；精细图解和标注仅在案例后台运行';
     if (['png', 'jpg', 'jpeg', 'webp', 'bmp'].includes(suffix)) return '图片将作为快速工序生成输入；精细图解和标注仅在案例后台运行';
     if (['dwg', 'dxf'].includes(suffix)) return 'CAD 将尝试提取可用内容参与快速工序生成';
+    if (['stl', 'obj', 'ply'].includes(suffix)) return '3D 网格将提取包围盒、主轴方向和预览图参与流程生成';
+    if (['step', 'stp', 'iges', 'igs'].includes(suffix)) return '精确 3D CAD 已接收；需要 CAD 内核才能提取孔、圆角和 B-Rep 特征';
     return '该格式后端可能不支持';
 }
 
@@ -146,6 +148,7 @@ function buildGenerationAiResponse(data) {
     return {
         ai_suggestions: data?.ai_suggestions || [],
         agent_trace: data?.agent_trace || null,
+        process_guidance: data?.process_guidance || data?.generation_ai_response?.process_guidance || null,
         job_id: data?.job_id || data?.process_job?.job_id || null,
         saved_at: new Date().toISOString(),
     };
@@ -189,6 +192,183 @@ function renderGenerationAiResponse(aiResponse, { details = false } = {}) {
     if (details) {
         html += '</details>';
     }
+    return html;
+}
+
+function renderProcessGuidance(guidance) {
+    if (!guidance) {
+        return '';
+    }
+    const feasibilityLabel = {
+        high: '可行性高',
+        medium: '可行性中等',
+        low: '可行性低',
+    }[guidance.feasibility] || '待评估';
+
+    let html = '<div class="result-section guidance-panel">';
+    html += '<h3>最终文字指导</h3>';
+    html += '<div class="guidance-head">';
+    html += `<div><span class="guidance-status">${escapeHtml(feasibilityLabel)}</span><strong>${escapeHtml(guidance.feasibility_text || '')}</strong></div>`;
+    html += `<div class="guidance-score">${escapeHtml(String(guidance.quality_score ?? '-'))}<small>/5</small></div>`;
+    html += '</div>';
+    if (guidance.executive_summary) {
+        html += `<div class="info">${escapeHtml(guidance.executive_summary)}</div>`;
+    }
+    if (guidance.data_readability) {
+        html += `<div class="info">${escapeHtml(guidance.data_readability)}</div>`;
+    }
+    if (guidance.metrics && guidance.metrics.length > 0) {
+        html += '<div class="guidance-metrics">';
+        guidance.metrics.forEach(metric => {
+            html += '<div class="guidance-metric">';
+            html += `<strong>${escapeHtml(metric.value || '')}</strong>`;
+            html += `<span>${escapeHtml(metric.label || '')}</span>`;
+            if (metric.note) html += `<small>${escapeHtml(metric.note)}</small>`;
+            html += '</div>';
+        });
+        html += '</div>';
+    }
+    html += renderGuidanceList('可直接利用的数据', guidance.key_usable_data);
+    html += renderGuidanceIssues(guidance.issues);
+    html += renderGuidanceList('建议流程', guidance.recommended_workflow);
+    html += renderGuidanceList('人工复核清单', guidance.manual_review);
+    html += renderGuidanceList('下一步动作', guidance.next_actions);
+    html += '</div>';
+    return html;
+}
+
+function buildAnnotationGuidance(explanations) {
+    const pages = [];
+    const annotations = [];
+    (explanations || []).forEach(explanation => {
+        (explanation.page_explanations || []).forEach(page => {
+            pages.push({ explanation, page });
+            (page.annotation_result?.annotations || []).forEach(annotation => {
+                annotations.push({ explanation, page, annotation });
+            });
+        });
+    });
+    const reviewItems = annotations.filter(item => {
+        const status = item.annotation.review_status;
+        const confidence = Number(item.annotation.confidence || 0);
+        return status === 'pending' || status === 'needs_manual_review' || confidence < 0.85 || item.annotation.source === 'agent_reasoning';
+    });
+    const acceptedItems = annotations.filter(item => {
+        const status = item.annotation.review_status;
+        const confidence = Number(item.annotation.confidence || 0);
+        return status === 'accepted' && confidence >= 0.85;
+    });
+    return {
+        pageCount: pages.length,
+        annotationCount: annotations.length,
+        reviewCount: reviewItems.length,
+        acceptedCount: acceptedItems.length,
+        acceptedItems,
+        reviewItems,
+    };
+}
+
+function renderAnnotationGuidance(explanations) {
+    const guidance = buildAnnotationGuidance(explanations);
+    if (!guidance.pageCount && !guidance.annotationCount) {
+        return '<div class="info">精细标注尚未形成可读结果。建议先启动或重试精细标注。</div>';
+    }
+    let html = '<div class="guidance-metrics">';
+    html += `<div class="guidance-metric"><strong>${guidance.pageCount}</strong><span>已解析页数</span><small>参与气泡图与标注导出</small></div>`;
+    html += `<div class="guidance-metric"><strong>${guidance.annotationCount}</strong><span>标注数量</span><small>已转换为可读摘要</small></div>`;
+    html += `<div class="guidance-metric"><strong>${guidance.acceptedCount}</strong><span>可优先利用</span><small>高置信且已通过</small></div>`;
+    html += `<div class="guidance-metric"><strong>${guidance.reviewCount}</strong><span>需复核</span><small>低置信、待审核或推理来源</small></div>`;
+    html += '</div>';
+
+    const usable = guidance.acceptedItems.slice(0, 8).map(item => readableAnnotationLine(item.annotation, item.explanation, item.page));
+    const review = guidance.reviewItems.slice(0, 10).map(item => readableAnnotationLine(item.annotation, item.explanation, item.page));
+    html += renderGuidanceList('可优先利用的标注', usable);
+    html += renderGuidanceList('必须人工复核的标注', review);
+    if (guidance.reviewCount > review.length) {
+        html += `<div class="warning">还有 ${guidance.reviewCount - review.length} 条复核项未展开，请下载 CSV 查看 readable_summary 和 review_action 列。</div>`;
+    }
+    return html;
+}
+
+function renderFinalInstructionUnit(finalGuidance, caseId, jobId) {
+    if (!finalGuidance) return '';
+    const statusLabel = {
+        needs_annotation: '需要补充标注',
+        review_required: '需要人工复核',
+        ready_for_process_review: '可进入工艺评审',
+    }[finalGuidance.status] || finalGuidance.status || '待确认';
+
+    let html = '<div class="result-section final-guidance-panel">';
+    html += `<h3>${escapeHtml(finalGuidance.title || '最终工序流程指导')}</h3>`;
+    html += `<div class="info"><strong>${escapeHtml(statusLabel)}：</strong>${escapeHtml(finalGuidance.summary || '')}</div>`;
+    if (finalGuidance.objective) {
+        html += `<div class="info">${escapeHtml(finalGuidance.objective)}</div>`;
+    }
+
+    if (finalGuidance.csv_url) {
+        html += `<p><a class="btn btn-sm" href="${API_BASE}/cases/${encodeURIComponent(caseId)}/annotations/assets/${encodeURIComponent(jobId || finalGuidance.job_id)}/${finalGuidance.csv_url}" target="_blank">下载可读 CSV</a></p>`;
+    }
+
+    const imageRefs = finalGuidance.image_refs || [];
+    if (imageRefs.length) {
+        html += '<h4>气泡图证据</h4>';
+        html += '<div class="final-image-grid">';
+        imageRefs.slice(0, 8).forEach(ref => {
+            const url = `${API_BASE}/cases/${encodeURIComponent(caseId)}/annotations/assets/${encodeURIComponent(jobId || finalGuidance.job_id)}/${ref.image_url}`;
+            html += '<a class="final-image-card" target="_blank" href="' + url + '">';
+            html += `<img src="${url}" alt="${escapeHtml(ref.title || '气泡图')}">`;
+            html += `<strong>${escapeHtml(ref.title || '气泡图')}</strong>`;
+            if (ref.summary) html += `<span>${escapeHtml(ref.summary)}</span>`;
+            html += '</a>';
+        });
+        html += '</div>';
+    }
+
+    const operationUnits = finalGuidance.operation_units || [];
+    if (operationUnits.length) {
+        html += '<h4>工序指导单元</h4>';
+        operationUnits.slice(0, 12).forEach(unit => {
+            html += '<div class="operation-card final-operation-unit">';
+            html += `<div class="operation-header"><span class="operation-no">${escapeHtml(unit.operation_no || '')}</span><span class="operation-name">${escapeHtml(unit.operation_name || '')}</span></div>`;
+            html += `<p>${escapeHtml(unit.instruction || '')}</p>`;
+            html += renderGuidanceList('操作步骤', unit.worker_steps);
+            html += renderGuidanceList('质量放行', unit.quality_gates);
+            html += renderGuidanceList('图纸依据', unit.drawing_basis);
+            html += renderGuidanceList('可用标注依据', unit.usable_annotation_basis);
+            html += renderGuidanceList('放行前复核', unit.review_before_release);
+            html += '</div>';
+        });
+    }
+
+    html += renderGuidanceList('可优先使用的标注', finalGuidance.usable_annotations);
+    html += renderGuidanceList('必须复核的标注', finalGuidance.review_required);
+    html += renderGuidanceList('交付说明', finalGuidance.handoff);
+    html += '</div>';
+    return html;
+}
+
+function readableAnnotationLine(annotation, explanation, page) {
+    const name = annotation.parameter_name || annotation.label || annotation.annotation_id || '未命名参数';
+    const value = annotation.parameter_value || annotation.normalized_text || annotation.raw_text || '待确认';
+    const source = annotation.source === 'pdf_page_image' ? '图像识别' : annotation.source === 'pdf_text' ? 'PDF文本' : '模型推理';
+    const confidence = Number(annotation.confidence || 0).toFixed(2);
+    return `${explanation.file_name} 第${page.page || 1}页：${name} = ${value}；来源 ${source}；置信度 ${confidence}`;
+}
+
+function renderGuidanceList(title, list) {
+    if (!list || list.length === 0) return '';
+    const items = list.map(item => `<li>${escapeHtml(item)}</li>`).join('');
+    return `<div class="guidance-list"><h4>${escapeHtml(title)}</h4><ul>${items}</ul></div>`;
+}
+
+function renderGuidanceIssues(issues) {
+    if (!issues || issues.length === 0) return '';
+    let html = '<div class="guidance-list"><h4>风险与限制</h4>';
+    issues.forEach(issue => {
+        const className = issue.severity === 'critical' ? 'critical' : issue.severity === 'warning' ? 'warning' : 'info';
+        html += `<div class="${className}"><strong>${escapeHtml(issue.title || '风险')}：</strong>${escapeHtml(issue.detail || '')}</div>`;
+    });
+    html += '</div>';
     return html;
 }
 
@@ -747,11 +927,11 @@ async function generateProcess() {
                 job = await startJobFromStoredFiles(boundCaseSourceFiles, mode, targetOperationCount, startedAt, uploadInfo);
             } else {
                 const files = selectedFiles;
-                const supportedSuffixes = ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'bmp', 'dwg', 'dxf'];
+                const supportedSuffixes = ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'bmp', 'dwg', 'dxf', 'stl', 'obj', 'ply', 'step', 'stp', 'iges', 'igs'];
                 const unsupportedFile = files.find(file => !supportedSuffixes.includes(getFileSuffix(file.name)));
                 if (unsupportedFile) {
                     resetGenerateButton(loading, generateButton);
-                    alert(`暂不支持 ${unsupportedFile.name} 的文件格式，请上传 PDF、图片或 DWG/DXF 文件`);
+                    alert(`暂不支持 ${unsupportedFile.name} 的文件格式，请上传 PDF、图片、DWG/DXF 或 3D 模型文件`);
                     return;
                 }
 
@@ -932,6 +1112,7 @@ function displayResult(data) {
     let html = '';
     
     // 生成页只展示快速工序结果；精细图解、气泡图和标注只在案例详情页展示。
+    html += renderProcessGuidance(data.process_guidance);
 
     // 相似案例推荐
     if (data.similar_cases && data.similar_cases.length > 0) {
@@ -1368,6 +1549,8 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult) {
     html += '</div>';
     html += '</div>';
 
+    html += renderProcessGuidance(caseData.generation_ai_response?.process_guidance);
+
     html += '<div class="result-section">';
     html += '<h3>快速 AI 回复</h3>';
     html += renderGenerationAiResponse(caseData.generation_ai_response, { details: true });
@@ -1389,10 +1572,12 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult) {
     html += '</div>';
 
     if (explanations.length) {
+        html += renderFinalInstructionUnit(annotationResult.final_guidance, caseData.case_id, annotationResult.job_id);
         html += '<div class="result-section">';
         html += `<h3>精细标注结果（${explanations.length} 份图纸）</h3>`;
+        html += renderAnnotationGuidance(explanations);
         if (annotationResult.export_csv_url) {
-            html += `<p><a class="btn btn-sm" href="${API_BASE}/cases/${encodeURIComponent(caseData.case_id)}/annotations/assets/${encodeURIComponent(annotationResult.job_id)}/${annotationResult.export_csv_url}" target="_blank">下载标注 CSV</a></p>`;
+            html += `<p><a class="btn btn-sm" href="${API_BASE}/cases/${encodeURIComponent(caseData.case_id)}/annotations/assets/${encodeURIComponent(annotationResult.job_id)}/${annotationResult.export_csv_url}" target="_blank">下载可读标注 CSV</a></p>`;
         }
         explanations.slice(0, 6).forEach(explanation => {
             html += `<div class="operation-card">`;
@@ -1407,7 +1592,15 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult) {
                 }
                 const annotations = page.annotation_result?.annotations || [];
                 if (annotations.length) {
-                    html += `<div class="info">标注数量：${annotations.length}</div>`;
+                    const reviewCount = annotations.filter(annotation => {
+                        const status = annotation.review_status;
+                        return status === 'pending' || status === 'needs_manual_review' || Number(annotation.confidence || 0) < 0.85 || annotation.source === 'agent_reasoning';
+                    }).length;
+                    html += `<div class="info">标注数量：${annotations.length}；需复核：${reviewCount}</div>`;
+                    html += renderGuidanceList(
+                        '本页关键标注',
+                        annotations.slice(0, 5).map(annotation => readableAnnotationLine(annotation, explanation, page))
+                    );
                 }
             });
             html += '</div>';

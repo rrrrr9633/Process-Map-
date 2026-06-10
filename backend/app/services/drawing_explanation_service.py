@@ -14,6 +14,7 @@ from app.services.ai_service import AIServiceError, ai_service
 from app.services.annotation_normalizer import map_view_local_regions_to_page, merge_annotation_results, normalize_annotation_result
 from app.services.cad_render_service import cad_render_service
 from app.services.drawing_parser import DrawingParser
+from app.services.geometry3d_service import geometry3d_service
 from app.services.ocr_service import ocr_service
 from app.services.sheet_view_splitter import SheetViewRegion, crop_view_payload, split_sheet_views
 
@@ -47,6 +48,9 @@ class DrawingExplanationService:
                 page = asset.page
                 ocr_text = ocr_service.extract_text_from_image(Path(asset.image_path))
                 pages.append((page, asset, payload, ocr_text))
+        elif geometry3d_service.is_supported_3d(path):
+            for asset, payload, geometry_text in geometry3d_service.render_pages(path, target_dir, file_index, file_name):
+                pages.append((asset.page, asset, payload, geometry_text))
         return pages
 
 

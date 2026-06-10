@@ -11,6 +11,7 @@ from app.models.drawing import DrawingParseResult
 from app.models.flow import ProcessFlow
 from app.models.drawing_explanation import DrawingExplanation
 from app.models.process import ProcessMode, ProcessPlan
+from app.models.process_guidance import ProcessGuidance
 
 
 class GenerateFromTextRequest(BaseModel):
@@ -41,6 +42,7 @@ class ProcessGenerationResponse(BaseModel):
     annotation_result: DrawingAnnotationResult = Field(default_factory=DrawingAnnotationResult)
     process_plan: ProcessPlan
     flow: ProcessFlow
+    process_guidance: Optional[ProcessGuidance] = None
     similar_cases: List[dict] = []
     ai_suggestions: List[str] = []
     agent_trace: Optional[AgentRunTrace] = None

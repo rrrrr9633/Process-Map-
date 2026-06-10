@@ -18,6 +18,7 @@ from app.models.drawing import (
     TechnicalRequirement,
 )
 from app.rules.crankshaft_rules import REQUIREMENT_RULES
+from app.services.geometry3d_service import geometry3d_service
 from app.services.ocr_service import ocr_service
 
 
@@ -46,6 +47,8 @@ class DrawingParser:
             return self.parse_dxf(path)
         if suffix == ".dwg":
             return self.parse_dwg(path)
+        if geometry3d_service.is_supported_3d(path):
+            return geometry3d_service.parse_to_drawing_result(path)
         return DrawingParseResult(
             risk_flags=[RiskFlag(field="file", message=f"暂不支持的文件格式：{suffix}", severity="critical")]
         )

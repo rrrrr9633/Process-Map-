@@ -6,6 +6,7 @@ from uuid import uuid4
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from app.models.annotation import DrawingAnnotationResult
 from app.models.drawing import DrawingParseResult
 from app.models.drawing_explanation import DrawingExplanation, ProcessJob
 from app.models.process import ProcessMode, ProcessPlan
@@ -18,6 +19,7 @@ from app.services.flow_builder import FlowBuilder
 from app.services.job_service import job_service
 from app.services.process_agent import process_agent
 from app.services.process_generator import ProcessGenerator
+from app.services.process_guidance_service import process_guidance_service
 
 router = APIRouter(prefix="/process", tags=["process"])
 parser = DrawingParser()
@@ -39,7 +41,23 @@ class FromStoredJobRequest(BaseModel):
     target_operation_count: int = 15
 
 
-SUPPORTED_UPLOAD_SUFFIXES = {"pdf", "png", "jpg", "jpeg", "webp", "bmp", "dwg", "dxf"}
+SUPPORTED_UPLOAD_SUFFIXES = {
+    "pdf",
+    "png",
+    "jpg",
+    "jpeg",
+    "webp",
+    "bmp",
+    "dwg",
+    "dxf",
+    "stl",
+    "obj",
+    "ply",
+    "step",
+    "stp",
+    "iges",
+    "igs",
+}
 
 
 def _upload_suffix(file: UploadFile) -> str:
@@ -140,6 +158,7 @@ async def _run_sync_explanation_pipeline(
         annotation_result=agent_response.annotation_result,
         process_plan=agent_response.process_plan,
         flow=agent_response.flow,
+        process_guidance=agent_response.process_guidance,
         similar_cases=agent_response.similar_cases,
         ai_suggestions=agent_response.ai_suggestions,
         agent_trace=agent_response.agent_trace,
@@ -192,6 +211,7 @@ async def _run_process_job(
             annotation_result=agent_response.annotation_result,
             process_plan=agent_response.process_plan,
             flow=agent_response.flow,
+            process_guidance=agent_response.process_guidance,
             similar_cases=agent_response.similar_cases,
             ai_suggestions=agent_response.ai_suggestions,
             agent_trace=agent_response.agent_trace,
@@ -286,6 +306,7 @@ async def generate_from_text(request: GenerateFromTextRequest) -> ProcessGenerat
         annotation_result=agent_response.annotation_result,
         process_plan=agent_response.process_plan,
         flow=agent_response.flow,
+        process_guidance=agent_response.process_guidance,
         similar_cases=agent_response.similar_cases,
         ai_suggestions=agent_response.ai_suggestions,
         agent_trace=agent_response.agent_trace,
@@ -327,6 +348,11 @@ async def generate_from_parse(request: GenerateFromParseRequest) -> ProcessGener
         parse_result=request.parse_result,
         process_plan=process_plan,
         flow=flow,
+        process_guidance=process_guidance_service.build(
+            parse_result=request.parse_result,
+            annotation_result=DrawingAnnotationResult(),
+            process_plan=process_plan,
+        ),
         similar_cases=similar_cases_data,
         ai_suggestions=ai_suggestions
     )

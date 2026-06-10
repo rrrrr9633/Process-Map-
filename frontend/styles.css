@@ -671,6 +671,143 @@ input[type="file"]:focus {
     margin-bottom: 16px;
 }
 
+.guidance-panel {
+    border-color: var(--border-strong);
+}
+
+.guidance-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 18px;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.guidance-head strong {
+    display: block;
+    margin-top: 8px;
+    font-size: 16px;
+    line-height: 1.5;
+}
+
+.guidance-status {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--black);
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+.guidance-score {
+    min-width: 86px;
+    border: 1px solid var(--black);
+    padding: 10px 12px;
+    text-align: center;
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.guidance-score small {
+    display: block;
+    margin-top: 5px;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.guidance-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+    margin: 14px 0;
+}
+
+.guidance-metric {
+    border: 1px solid var(--border);
+    padding: 12px;
+    min-height: 98px;
+}
+
+.guidance-metric strong,
+.guidance-metric span,
+.guidance-metric small {
+    display: block;
+}
+
+.guidance-metric strong {
+    font-size: 20px;
+    line-height: 1.2;
+}
+
+.guidance-metric span {
+    margin-top: 6px;
+    font-weight: 600;
+}
+
+.guidance-metric small {
+    margin-top: 4px;
+    color: var(--text-muted);
+}
+
+.guidance-list ul {
+    margin-left: 18px;
+}
+
+.guidance-list li {
+    margin: 5px 0;
+}
+
+.final-guidance-panel {
+    border-color: var(--border-strong);
+}
+
+.final-image-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+    margin: 12px 0 18px;
+}
+
+.final-image-card {
+    display: grid;
+    gap: 8px;
+    border: 1px solid var(--border);
+    padding: 10px;
+    color: var(--text);
+    text-decoration: none;
+    background: var(--white);
+}
+
+.final-image-card:hover {
+    border-color: var(--border-strong);
+}
+
+.final-image-card img {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    object-fit: contain;
+    border: 1px solid var(--border);
+    background: var(--surface-muted);
+}
+
+.final-image-card strong {
+    font-size: 13px;
+    line-height: 1.3;
+}
+
+.final-image-card span {
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.final-operation-unit {
+    margin: 12px 0;
+}
+
 .cases-filter {
     display: flex;
     flex-wrap: wrap;

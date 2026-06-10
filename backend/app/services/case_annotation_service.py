@@ -14,6 +14,7 @@ from app.services.bubble_diagram_service import bubble_diagram_service
 from app.services.case_service import BACKEND_DIR, case_service
 from app.services.drawing_explanation_service import drawing_explanation_service
 from app.services.export_service import ExportService
+from app.services.final_guidance_service import final_guidance_service
 
 
 UPLOADS_DIR = BACKEND_DIR / "uploads"
@@ -154,7 +155,7 @@ class CaseAnnotationService:
                 status="completed",
                 stage="completed",
                 progress=100,
-                message="精细标注完成",
+                message="精细标注完成，最终指导单元已生成",
                 ai_stream_preview="",
             )
         except Exception as exc:
@@ -201,15 +202,29 @@ class CaseAnnotationService:
             return self.job_to_dict(record) if record else None
 
     def get_result(self, case_id: str) -> dict | None:
+        case = case_service.load_case(case_id)
+        if not case:
+            return None
         with SessionLocal() as session:
             record = session.get(CaseAnnotationResultRecord, case_id)
             if not record:
                 return None
+            explanations = [
+                DrawingExplanation.model_validate(item)
+                for item in json.loads(record.explanations_json)
+            ]
+            final_guidance = final_guidance_service.build(
+                case=case,
+                job_id=record.job_id,
+                explanations=explanations,
+                export_csv_url=record.export_csv_url,
+            )
             return {
                 "case_id": record.case_id,
                 "job_id": record.job_id,
-                "explanations": json.loads(record.explanations_json),
+                "explanations": [item.model_dump(mode="json") for item in explanations],
                 "export_csv_url": record.export_csv_url,
+                "final_guidance": final_guidance,
                 "updated_at": record.updated_at.isoformat(),
             }
 

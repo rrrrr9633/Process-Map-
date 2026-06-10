@@ -165,12 +165,12 @@ class AIService:
         if not self.enabled:
             raise AIServiceError("AI Agent 未启用：未配置 AI_API_KEY")
 
-        max_annotations = 3 if simplified else 6
+        max_annotations = 5 if simplified else 12
         output_schema = {
-            "visual_summary": "这张图纸主要表达的零件、加工步骤或检验内容，80字以内",
-            "detected_features": [f"最多{3 if simplified else 5}个关键结构、加工对象、关键区域"],
+            "visual_summary": "这张图纸主要表达的零件、加工步骤或检验内容，必须是工人能听懂的话，120字以内",
+            "detected_features": [f"最多{4 if simplified else 8}个关键结构、加工对象、关键区域"],
             "related_operations": ["最多3个建议对应的工序名称或编号"],
-            "risk_notes": ["最多3个需要人工确认的疑点"],
+            "risk_notes": ["最多5个需要人工确认的疑点，说明为什么影响工艺"],
             "annotation_result": {
                 "annotations": [
                     {
@@ -188,7 +188,7 @@ class AIService:
                         "source": "pdf_page_image|pdf_embedded_image|pdf_text|agent_reasoning",
                         "confidence": 0.8,
                         "review_status": "pending|accepted|rejected|needs_manual_review",
-                        "review_reason": "20字以内审核原因",
+                        "review_reason": "审核原因，必须说明是看不清、符号不确定、坐标不准、还是推理来源",
                     }
                 ],
                 "export_rows": [],
@@ -212,13 +212,17 @@ class AIService:
                         "output_schema": output_schema,
                         "rules": [
                             "只返回 JSON，不要返回 Markdown。",
-                            "visual_summary 必须用工人能理解的话说明这张图在表达什么，控制在80字以内。",
-                            f"detected_features 最多 {3 if simplified else 5} 项，related_operations 最多 3 项，risk_notes 最多 3 项。",
-                            f"annotations 最多 {max_annotations} 项，只保留当前视图中最关键、最清晰、最影响工艺的标注；不要把 OCR 中未定位的所有尺寸都展开成 annotations。",
+                            "visual_summary 必须用工人能理解的话说明这张图在表达什么，不要使用只有软件工程师才懂的字段名。",
+                            f"detected_features 最多 {4 if simplified else 8} 项，related_operations 最多 3 项，risk_notes 最多 5 项。",
+                            f"annotations 最多 {max_annotations} 项，按优先级提取：基准/形位公差、关键尺寸公差、粗糙度、热处理/动平衡/检验要求、螺纹/孔/圆角/倒角。",
+                            "不要直接生成气泡图或图片；只输出结构化 JSON，气泡图由后端用标注列表生成。",
+                            "每条 annotation 的 parameter_name 必须是中文工程名称；parameter_value 使用显示安全写法：Ra 写 Ra，粗糙度图形符号省略，Ø/∅ 统一写 Φ，± 写 ±，× 写 ×，° 写 °。",
+                            "不要输出容易渲染成方块的形位/粗糙度 Unicode 符号；形位公差符号用中文描述，例如 ⊥ 写 垂直度，∥ 写 平行度。",
                             "annotations 中 region 坐标使用 unit=ratio；若提供了 view_region 则相对当前视图裁剪图 0~1，否则相对整页 0~1；无法确定坐标时只在 risk_notes 说明，不要额外创建 annotation。",
                             "结合 ocr_text 校正尺寸和标注，不要与 OCR 明显冲突。",
                             "不要编造具体尺寸、公差或材料；看不清就放入 risk_notes。",
-                            "如果不确定标注坐标，返回空 annotations 也可以，但必须返回合法 JSON。",
+                            "如果标注内容清楚但坐标不确定，可以返回 annotation，但 review_status 必须是 needs_manual_review，review_reason 写明坐标需人工校正。",
+                            "返回结果要服务于后续生成工序图：优先保留会影响加工、检验、装夹、清洗、动平衡、打刻的标注。",
                         ],
                     },
                     ensure_ascii=False,

@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     agent_max_pdf_pages: int = 20
     agent_max_views_per_page: int = 4
     agent_max_pdf_text_chars: int = 12000
-    agent_goal: str = "根据 PDF 图纸中的复杂图片和标注拆分为可执行工艺流程图"
+    agent_goal: str = "根据 3D 模型、PDF 图纸、CAD 预览和工程标注拆分为人能看懂的可执行工艺流程图"
 
     # 数据库配置
     mysql_host: str = "localhost"

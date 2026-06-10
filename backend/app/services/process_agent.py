@@ -18,6 +18,8 @@ from app.models.process import Operation, ProcessMode, ProcessPlan
 from app.services.ai_service import AIServiceError, ai_service
 from app.services.drawing_parser import DrawingParser
 from app.services.flow_builder import FlowBuilder
+from app.services.geometry3d_service import geometry3d_service
+from app.services.process_guidance_service import process_guidance_service
 from app.services.process_validator import ProcessValidator
 
 
@@ -91,6 +93,8 @@ class ProcessAgent:
             print(f"[process] batch local step {index}/{len(file_paths)} start: {path.name}", flush=True)
             parse_result = self.parser.parse_file(path)
             parse_results.append(parse_result)
+            if not explanations and len(image_payloads) < settings.agent_max_images:
+                image_payloads.extend(self._extract_images(path, trace)[: settings.agent_max_images - len(image_payloads)])
             elapsed_ms = int((perf_counter() - started_at) * 1000)
             print(f"[process] batch local step {index}/{len(file_paths)} done in {elapsed_ms}ms: {path.name}", flush=True)
             trace.stages.append(f"完成第 {index} 份图纸本地解析：{path.name}")
@@ -175,6 +179,9 @@ class ProcessAgent:
             return []
         if suffix in {".dxf", ".dwg"}:
             rendered = self._render_cad_preview_payload(path, trace)
+            return rendered
+        if geometry3d_service.is_supported_3d(path):
+            rendered = self._render_3d_preview_payload(path, trace)
             return rendered
         if suffix != ".pdf":
             return []
@@ -316,11 +323,44 @@ class ProcessAgent:
             return None
 
     def _render_cad_preview_payload(self, path: Path, trace: AgentRunTrace) -> list[dict[str, str]]:
+        from app.services.cad_render_service import cad_render_service
+
+        target_dir = Path(settings.archive_path) / "agent_previews"
+        rendered = cad_render_service.render_pages(path, target_dir, file_index=1, file_name=path.name, max_pages=1)
+        payloads = [payload for _, payload in rendered]
+        if payloads:
+            trace.stages.append(f"生成 CAD 预览图参与视觉分析：{path.name}")
+            return payloads
         trace.questions.append(
             AgentQuestion(
                 field="cad_preview",
-                question="CAD 文件暂未生成可参与 AI 视觉分析的预览图，是否改传 PDF 或图片版图纸？",
+                question="CAD 文件未生成可参与 AI 视觉分析的预览图，请确认 DXF/DWG 渲染依赖。",
                 reason=f"当前文件：{path.name}",
+                severity="warning",
+            )
+        )
+        return []
+
+    def _render_3d_preview_payload(self, path: Path, trace: AgentRunTrace) -> list[dict[str, str]]:
+        target_dir = Path(settings.archive_path) / "agent_3d_previews"
+        payloads = geometry3d_service.render_payloads(path, target_dir, file_index=1)
+        parse_result = geometry3d_service.parse_to_drawing_result(path)
+        trace.artifacts.append(
+            AgentArtifact(
+                kind="vision_observation",
+                title="3D 几何分析",
+                content=parse_result.raw_text or "",
+                confidence=0.7 if payloads else 0.35,
+            )
+        )
+        if payloads:
+            trace.stages.append(f"生成 3D 几何预览图参与视觉分析：{path.name}")
+            return payloads
+        trace.questions.append(
+            AgentQuestion(
+                field="geometry_3d",
+                question="3D 模型未生成预览，请确认模型格式或安装 CAD 内核。",
+                reason=parse_result.raw_text or path.name,
                 severity="warning",
             )
         )
@@ -363,6 +403,20 @@ class ProcessAgent:
         trace.artifacts.append(
             AgentArtifact(kind="flow", title="AI Agent 流程图", content=flow.model_dump(mode="json"), confidence=0.82)
         )
+        process_guidance = process_guidance_service.build(
+            parse_result=parse_result,
+            annotation_result=annotation_result,
+            process_plan=process_plan,
+            agent_trace=trace,
+        )
+        trace.artifacts.append(
+            AgentArtifact(
+                kind="process_guidance",
+                title="第三层可读工艺指导",
+                content=process_guidance.model_dump(mode="json"),
+                confidence=process_guidance.quality_score / 5,
+            )
+        )
 
         suggestions = [str(item) for item in payload.get("suggestions", []) if item]
         if not suggestions:
@@ -373,6 +427,7 @@ class ProcessAgent:
             annotation_result=annotation_result,
             process_plan=process_plan,
             flow=flow,
+            process_guidance=process_guidance,
             similar_cases=[],
             ai_suggestions=suggestions,
             agent_trace=trace,

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import textwrap
 
 from PIL import Image, ImageDraw, ImageFont
 
 from app.models.annotation import DrawingAnnotation
 from app.models.drawing_explanation import BubbleDiagramAsset, DrawingExplanation, DrawingPageExplanation
+from app.services.engineering_text import normalize_engineering_text
 
 
 class BubbleDiagramService:
@@ -104,13 +106,16 @@ class BubbleDiagramService:
         return page_explanation
 
     def _build_canvas(self, base: Image.Image, annotations: list[DrawingAnnotation]) -> Image.Image:
-        list_width = 420
-        padding = 18
-        canvas = Image.new("RGB", (base.width + list_width, max(base.height, 260)), "white")
+        list_width = 560
+        padding = 20
+        row_height = 86
+        canvas_height = max(base.height, padding * 2 + 40 + max(1, len(annotations)) * row_height)
+        canvas = Image.new("RGB", (base.width + list_width, canvas_height), "white")
         canvas.paste(base, (0, 0))
         draw = ImageDraw.Draw(canvas)
-        font = ImageFont.load_default()
-        strong = ImageFont.load_default()
+        font = self._load_font(18)
+        small = self._load_font(15)
+        strong = self._load_font(20)
 
         draw.line((base.width, 0, base.width, canvas.height), fill=(20, 20, 20), width=2)
         draw.text((base.width + padding, padding), "气泡标注清单", fill=(0, 0, 0), font=strong)
@@ -132,14 +137,60 @@ class BubbleDiagramService:
                 draw.line((bubble_x + 23, bubble_y + 24, x1, y1), fill=color, width=2)
 
             row_y = padding + 36 + (index - 1) * 56
+            row_y = padding + 40 + (index - 1) * row_height
             if row_y > canvas.height - 40:
                 continue
-            text = annotation.parameter_name or annotation.normalized_text or annotation.raw_text or label
-            value = annotation.parameter_value or ""
-            draw.text((base.width + padding, row_y), f"{label}  {text}"[:58], fill=color, font=strong)
-            draw.text((base.width + padding, row_y + 18), f"值：{value or '待确认'}  状态：{annotation.review_status}"[:64], fill=(70, 70, 70), font=font)
-            draw.text((base.width + padding, row_y + 34), f"原文：{annotation.raw_text or '待确认'}"[:64], fill=(70, 70, 70), font=font)
+            text = self._safe_text(annotation.parameter_name or annotation.normalized_text or annotation.raw_text or label)
+            value = self._safe_text(annotation.parameter_value or annotation.normalized_text or annotation.raw_text or "待确认")
+            status = self._status_label(annotation.review_status)
+            summary = self._annotation_summary(annotation)
+            draw.text((base.width + padding, row_y), f"{label}  {text}", fill=color, font=strong)
+            draw.text((base.width + padding, row_y + 25), f"值：{value}  状态：{status}", fill=(55, 55, 55), font=font)
+            for line_index, line in enumerate(self._wrap_text(summary, 38)[:2]):
+                draw.text((base.width + padding, row_y + 49 + line_index * 18), line, fill=(80, 80, 80), font=small)
         return canvas
+
+    def _load_font(self, size: int):
+        candidates = [
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            "/System/Library/Fonts/STHeiti Medium.ttc",
+            "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        ]
+        for candidate in candidates:
+            path = Path(candidate)
+            if path.is_file():
+                try:
+                    return ImageFont.truetype(str(path), size=size)
+                except Exception:
+                    continue
+        return ImageFont.load_default()
+
+    def _safe_text(self, value: str) -> str:
+        return normalize_engineering_text(value)
+
+    def _wrap_text(self, value: str, width: int) -> list[str]:
+        text = self._safe_text(value)
+        if not text:
+            return []
+        return textwrap.wrap(text, width=width, break_long_words=False, replace_whitespace=False) or [text]
+
+    def _status_label(self, status: str) -> str:
+        return {
+            "accepted": "可用",
+            "pending": "待复核",
+            "needs_manual_review": "需人工确认",
+            "rejected": "已拒绝",
+        }.get(status, status or "待复核")
+
+    def _annotation_summary(self, annotation: DrawingAnnotation) -> str:
+        name = annotation.parameter_name or annotation.label or annotation.annotation_id
+        value = annotation.parameter_value or annotation.normalized_text or annotation.raw_text or "待确认"
+        source = "图像识别" if annotation.source == "pdf_page_image" else "PDF文本" if annotation.source == "pdf_text" else "模型推理"
+        return f"说明：{name} = {value}；来源：{source}；置信度：{annotation.confidence:.2f}"
 
     def _has_valid_region(self, annotation: DrawingAnnotation) -> bool:
         region = annotation.region
