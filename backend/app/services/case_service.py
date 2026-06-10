@@ -51,7 +51,8 @@ class CaseService:
                 session.commit()
             return case.case_id
         except SQLAlchemyError as exc:
-            raise RuntimeError(f"案例写入 MySQL 失败：{type(exc).__name__}: {exc}") from exc
+            print(f"[case] mysql save failed, fallback to json: {type(exc).__name__}: {exc}", flush=True)
+            return self._save_legacy_json_case(case)
 
     def load_case(self, case_id: str) -> Optional[ProcessCase]:
         try:
@@ -126,7 +127,8 @@ class CaseService:
                     query = query.filter(CaseRecord.quality == quality.value)
                 records = query.order_by(CaseRecord.updated_at.desc()).limit(limit).all()
                 cases = [self._record_to_case(record) for record in records]
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            print(f"[case] mysql list failed, fallback to json: {type(exc).__name__}: {exc}", flush=True)
             cases = []
 
         if not cases:
@@ -134,6 +136,27 @@ class CaseService:
         if tags:
             cases = [case for case in cases if any(tag in case.tags for tag in tags)]
         return cases[:limit]
+
+    def storage_status(self) -> dict:
+        mysql_status: dict = {"ok": False, "count": 0, "error": ""}
+        try:
+            with SessionLocal() as session:
+                mysql_status["count"] = session.query(CaseRecord).count()
+                mysql_status["ok"] = True
+        except Exception as exc:
+            mysql_status["error"] = f"{type(exc).__name__}: {exc}"
+
+        legacy_files = sorted(self.storage_path.glob("*.json"))
+        legacy_cases = self._list_legacy_json_cases(limit=10000)
+        return {
+            "mysql": mysql_status,
+            "legacy_json": {
+                "path": str(self.storage_path.resolve()),
+                "file_count": len(legacy_files),
+                "valid_case_count": len(legacy_cases),
+                "files": [path.name for path in legacy_files[:20]],
+            },
+        }
 
     def add_human_edit(self, case_id: str, edit: HumanEdit) -> bool:
         case = self.load_case(case_id)
@@ -237,6 +260,17 @@ class CaseService:
             return None
         with open(file_path, "r", encoding="utf-8") as f:
             return ProcessCase(**json.load(f))
+
+    def _save_legacy_json_case(self, case: ProcessCase) -> str:
+        self.storage_path.mkdir(exist_ok=True, parents=True)
+        file_path = self.storage_path / f"{case.case_id}.json"
+        tmp_path = file_path.with_suffix(".json.tmp")
+        tmp_path.write_text(
+            json.dumps(case.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        tmp_path.replace(file_path)
+        return case.case_id
 
     def _list_legacy_json_cases(
         self,

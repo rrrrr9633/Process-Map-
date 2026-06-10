@@ -506,6 +506,12 @@ class AIService:
             "Content-Type": "application/json",
         }
         response_payload = self._responses_payload(payload)
+        if on_stream_delta:
+            status_text = f"Ark Responses 请求已发出，模型 {self.model_name} 正在处理图文输入。"
+            try:
+                on_stream_delta(status_text, 1, status_text)
+            except Exception as exc:
+                print(f"[ai] responses status callback failed: {type(exc).__name__}: {exc}", flush=True)
         async with httpx.AsyncClient(timeout=request_timeout) as client:
             print("[ai] responses request start", flush=True)
             response = await client.post(f"{self.api_base}/responses", headers=headers, json=response_payload)
@@ -514,7 +520,7 @@ class AIService:
         content = self._response_text(response.json()).strip()
         if on_stream_delta and content:
             try:
-                on_stream_delta(content, 1, content)
+                on_stream_delta(content, 2, content)
             except Exception as exc:
                 print(f"[ai] responses callback failed: {type(exc).__name__}: {exc}", flush=True)
         elapsed_ms = int((perf_counter() - request_started_at) * 1000)

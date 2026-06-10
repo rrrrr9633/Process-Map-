@@ -82,6 +82,12 @@ def list_cases(
     return case_service.list_cases(status=status, quality=quality, limit=limit)
 
 
+@router.get("/storage/status")
+def case_storage_status() -> dict:
+    """诊断案例存储：确认 MySQL 与 legacy JSON 各自是否可读。"""
+    return case_service.storage_status()
+
+
 @router.get("/{case_id}")
 def get_case(case_id: str) -> ProcessCase:
     """获取案例详情"""

@@ -135,8 +135,6 @@ body {
 }
 
 .result-module > summary::-webkit-details-marker,
-.flow-step-card > summary::-webkit-details-marker,
-.operation-card > summary::-webkit-details-marker,
 .nested-details > summary::-webkit-details-marker {
     display: none;
 }
@@ -653,13 +651,11 @@ input[type="file"]:focus {
     background: var(--white);
 }
 
-.flow-step-card > summary {
+.flow-step-head {
     display: grid;
     grid-template-columns: 42px minmax(0, 1fr);
     gap: 14px;
     padding: 14px;
-    cursor: pointer;
-    list-style: none;
 }
 
 .flow-step-index {
@@ -808,20 +804,6 @@ input[type="file"]:focus {
     gap: 10px;
     margin-bottom: 0;
     padding: 14px 16px;
-    cursor: pointer;
-    list-style: none;
-}
-
-.operation-header::after {
-    content: "展开";
-    flex: 0 0 auto;
-    color: var(--text-muted);
-    font-size: 12px;
-    font-weight: 600;
-}
-
-.operation-card[open] > .operation-header::after {
-    content: "收起";
 }
 
 .operation-no {

@@ -860,9 +860,11 @@ async function pollProcessJob(jobId, startedAt, uploadInfo) {
             : null;
         const jobDetail = isFailed
             ? `失败原因：${job.error || job.message || '任务失败'}；未生成可用工序结果。`
-            : aiPreview
+            : aiPreview && Number(job.ai_stream_chunks || 0) > 0
                 ? `阶段：${job.stage}；AI 已返回 ${job.ai_stream_chunks || 0} 段内容，正在等待完整结果。`
-                : `阶段：${job.stage}；正在等待后端返回结果。`;
+                : isAiStage
+                    ? `阶段：${job.stage}；AI 请求已发出，正在等待模型完成。`
+                    : `阶段：${job.stage}；正在等待后端返回结果。`;
         setGenerationProgress(
             job.message || (isFailed ? '任务失败' : '任务处理中'),
             jobDetail,
@@ -1223,15 +1225,17 @@ function renderReadableFlow(operations = []) {
     return `
         <div class="readable-flow">
             ${operations.map((op, index) => `
-                <details class="flow-step-card" ${index === 0 ? 'open' : ''}>
-                    <summary>
+                <div class="flow-step-card">
+                    <div class="flow-step-head">
                         <span class="flow-step-index">${index + 1}</span>
-                        <span class="flow-step-summary">
-                            <span class="operation-no">${escapeHtml(op.operation_no || String(index + 1))}</span>
-                            <strong>${escapeHtml(op.operation_name || '未命名工序')}</strong>
+                        <div class="flow-step-summary">
+                            <div>
+                                <span class="operation-no">${escapeHtml(op.operation_no || String(index + 1))}</span>
+                                <strong>${escapeHtml(op.operation_name || '未命名工序')}</strong>
+                            </div>
                             <small>${escapeHtml(op.content || '暂无工序说明')}</small>
-                        </span>
-                    </summary>
+                        </div>
+                    </div>
                     <div class="flow-step-body">
                         <p>${escapeHtml(op.content || '暂无工序说明')}</p>
                         <div class="flow-step-meta">
@@ -1245,7 +1249,7 @@ function renderReadableFlow(operations = []) {
                             </div>
                         ` : ''}
                     </div>
-                </details>
+                </div>
                 ${index < operations.length - 1 ? '<div class="flow-step-arrow">↓</div>' : ''}
             `).join('')}
         </div>
@@ -1390,7 +1394,7 @@ function renderOperationDetail(op, index) {
 function renderProcessPlanModule(plan) {
     const operations = plan.operations || [];
     let html = `<p><strong>模式：</strong>${plan.mode === 'standard_8' ? '标准8道工序' : '详细工序'}</p>`;
-    html += '<div class="info">点击每道工序标题行可展开或收起具体操作、设备、检验项和图纸依据。</div>';
+    html += '<div class="info">每道工序默认展开；只保留上层模块折叠，便于整体收起或展开。</div>';
     if (plan.validation_issues && plan.validation_issues.length > 0) {
         html += '<h4>验证问题</h4>';
         plan.validation_issues.forEach(issue => {
@@ -1400,16 +1404,16 @@ function renderProcessPlanModule(plan) {
     }
     html += '<div class="operation-accordion">';
     operations.forEach((op, index) => {
-        html += `<details class="operation-card" ${index === 0 ? 'open' : ''}>`;
-        html += '<summary class="operation-header">';
+        html += '<div class="operation-card">';
+        html += '<div class="operation-header">';
         html += `<span class="operation-no">${escapeHtml(op.operation_no || String(index + 1))}</span>`;
         html += `<span class="operation-name">${escapeHtml(op.operation_name || '未命名工序')}</span>`;
         if (op.mandatory) html += '<span class="badge mandatory">必须</span>';
         if (op.requires_manual_review) html += '<span class="badge review">需审核</span>';
         if (op.operation_type) html += `<span class="operation-type">${escapeHtml(op.operation_type)}</span>`;
-        html += '</summary>';
+        html += '</div>';
         html += renderOperationDetail(op, index);
-        html += '</details>';
+        html += '</div>';
     });
     html += '</div>';
     return html;
@@ -1420,7 +1424,7 @@ function renderFlowModule(data, flow) {
     if (data.loaded_case_name) {
         html += `<div class="info"><strong>案例来源：</strong>${escapeHtml(data.loaded_case_name)}。当前案例已加载为输入来源；如已绑定图纸，点击“生成工序方案”会复用对应 uploads 文件重新生成。</div>`;
     }
-    html += '<div class="info">这里是默认展开的图文对照流程；点击单道工序标题可查看或收起细节。</div>';
+    html += '<div class="info">这里是默认展开的图文对照流程；单道工序全部展开，只有本模块整体可折叠。</div>';
     html += renderProcessOverview(data.process_plan.operations || []);
     html += renderReadableFlow(data.process_plan.operations || []);
     return html;
