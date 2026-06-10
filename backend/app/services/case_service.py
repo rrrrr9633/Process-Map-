@@ -174,6 +174,7 @@ class CaseService:
             process_plan_json=case.process_plan.model_dump_json(),
             source_files_json=_json([item.model_dump(mode="json") for item in case.source_files], []),
             external_conditions_json=_json(case.external_conditions) if case.external_conditions is not None else None,
+            generation_ai_response_json=_json(case.generation_ai_response) if case.generation_ai_response is not None else None,
             human_edits_json=_json([item.model_dump(mode="json") for item in case.human_edits], []),
             ai_errors_json=_json(case.ai_errors, []),
             status=case.status.value,
@@ -192,8 +193,8 @@ class CaseService:
     def _copy_record(self, source: CaseRecord, target: CaseRecord) -> None:
         for key in (
             "case_name", "drawing_parse_result_json", "process_plan_json", "source_files_json",
-            "external_conditions_json", "human_edits_json", "ai_errors_json", "status", "quality",
-            "creator", "reviewer", "review_comments", "tags_json", "production_feedback",
+            "external_conditions_json", "generation_ai_response_json", "human_edits_json", "ai_errors_json",
+            "status", "quality", "creator", "reviewer", "review_comments", "tags_json", "production_feedback",
             "actual_duration", "quality_issues_json", "created_at", "updated_at",
         ):
             setattr(target, key, getattr(source, key))
@@ -207,6 +208,7 @@ class CaseService:
             drawing_parse_result=DrawingParseResult.model_validate_json(record.drawing_parse_result_json),
             source_files=[CaseSourceFile.model_validate(item) for item in _loads(record.source_files_json, [])],
             external_conditions=_loads(record.external_conditions_json, None),
+            generation_ai_response=_loads(record.generation_ai_response_json, None),
             process_plan=ProcessPlan.model_validate_json(record.process_plan_json),
             human_edits=[HumanEdit.model_validate(item) for item in _loads(record.human_edits_json, [])],
             ai_errors=_loads(record.ai_errors_json, []),

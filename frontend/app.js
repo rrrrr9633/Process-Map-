@@ -142,6 +142,56 @@ function escapeHtml(value) {
         .replace(/'/g, '&#39;');
 }
 
+function buildGenerationAiResponse(data) {
+    return {
+        ai_suggestions: data?.ai_suggestions || [],
+        agent_trace: data?.agent_trace || null,
+        job_id: data?.job_id || data?.process_job?.job_id || null,
+        saved_at: new Date().toISOString(),
+    };
+}
+
+function renderGenerationAiResponse(aiResponse, { details = false } = {}) {
+    const suggestions = aiResponse?.ai_suggestions || [];
+    const trace = aiResponse?.agent_trace || null;
+    if (!suggestions.length && !trace) {
+        return '<div class="info">暂无快速 AI 回复记录</div>';
+    }
+
+    let html = details ? '<details class="technical-flow-details"><summary>查看快速 AI 回复</summary>' : '';
+    if (suggestions.length) {
+        html += '<h4>AI 建议</h4>';
+        suggestions.forEach(s => {
+            html += `<div class="info">${escapeHtml(s)}</div>`;
+        });
+    }
+    if (trace) {
+        html += '<h4>Agent 识别链路</h4>';
+        html += '<div class="part-info-grid">';
+        html += `<p><strong>AI调用：</strong>${trace.used_ai ? '已使用' : '未使用'}</p>`;
+        html += `<p><strong>视觉输入：</strong>${trace.used_vision ? '已使用图像' : '未使用图像'}</p>`;
+        html += `<p><strong>兜底方案：</strong>${trace.fallback_used ? '已启用' : '未启用'}</p>`;
+        html += '</div>';
+        if (trace.stages && trace.stages.length > 0) {
+            html += '<h4>执行阶段</h4>';
+            trace.stages.forEach(stage => {
+                html += `<div class="info">${escapeHtml(stage)}</div>`;
+            });
+        }
+        if (trace.questions && trace.questions.length > 0) {
+            html += '<h4>人工确认项</h4>';
+            trace.questions.forEach(item => {
+                const className = item.severity === 'critical' ? 'critical' : item.severity === 'warning' ? 'warning' : 'info';
+                html += `<div class="${className}"><strong>${escapeHtml(item.field)}：</strong>${escapeHtml(item.question)}<br><small>${escapeHtml(item.reason || '')}</small></div>`;
+            });
+        }
+    }
+    if (details) {
+        html += '</details>';
+    }
+    return html;
+}
+
 async function loadConfigStatus() {
     const apiBaseDisplay = document.getElementById('api-base-display');
     const aiStatus = document.getElementById('ai-status');
@@ -893,38 +943,11 @@ function displayResult(data) {
         html += '</div>';
     }
     
-    // AI建议
-    if (data.ai_suggestions && data.ai_suggestions.length > 0) {
+    // AI 回复与 Agent 执行链路
+    if ((data.ai_suggestions && data.ai_suggestions.length > 0) || data.agent_trace) {
         html += '<div class="result-section">';
-        html += '<h3>AI 建议</h3>';
-        data.ai_suggestions.forEach(s => {
-            html += `<div class="info">${s}</div>`;
-        });
-        html += '</div>';
-    }
-    
-    // Agent执行链路
-    if (data.agent_trace) {
-        html += '<div class="result-section">';
-        html += '<h3>Agent 识别链路</h3>';
-        html += '<div class="part-info-grid">';
-        html += `<p><strong>AI调用：</strong>${data.agent_trace.used_ai ? '已使用' : '未使用'}</p>`;
-        html += `<p><strong>视觉输入：</strong>${data.agent_trace.used_vision ? '已使用图像' : '未使用图像'}</p>`;
-        html += `<p><strong>兜底方案：</strong>${data.agent_trace.fallback_used ? '已启用' : '未启用'}</p>`;
-        html += '</div>';
-        if (data.agent_trace.stages && data.agent_trace.stages.length > 0) {
-            html += '<h4>执行阶段：</h4>';
-            data.agent_trace.stages.forEach(stage => {
-                html += `<div class="info">${escapeHtml(stage)}</div>`;
-            });
-        }
-        if (data.agent_trace.questions && data.agent_trace.questions.length > 0) {
-            html += '<h4>人工确认项：</h4>';
-            data.agent_trace.questions.forEach(item => {
-                const className = item.severity === 'critical' ? 'critical' : item.severity === 'warning' ? 'warning' : 'info';
-                html += `<div class="${className}"><strong>${escapeHtml(item.field)}：</strong>${escapeHtml(item.question)}<br><small>${escapeHtml(item.reason || '')}</small></div>`;
-            });
-        }
+        html += '<h3>快速 AI 回复</h3>';
+        html += renderGenerationAiResponse(buildGenerationAiResponse(data));
         html += '</div>';
     }
 
@@ -1168,6 +1191,7 @@ async function saveAsCase() {
             source_files: sourceFiles,
             process_plan: currentData.process_plan,
             external_conditions: null,
+            generation_ai_response: buildGenerationAiResponse(currentData),
             human_edits: [],
             ai_errors: [],
             status: 'draft',
@@ -1345,6 +1369,11 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult) {
     html += '</div>';
 
     html += '<div class="result-section">';
+    html += '<h3>快速 AI 回复</h3>';
+    html += renderGenerationAiResponse(caseData.generation_ai_response, { details: true });
+    html += '</div>';
+
+    html += '<div class="result-section">';
     html += '<h3>案例精细标注</h3>';
     html += `<div class="info"><strong>状态：</strong>${escapeHtml(status.status || 'not_started')} / ${escapeHtml(status.stage || 'not_started')}</div>`;
     html += `<div class="info"><strong>说明：</strong>${escapeHtml(status.message || '')}</div>`;
@@ -1437,7 +1466,9 @@ async function loadCaseForEdit(caseId) {
             process_plan: caseData.process_plan,
             flow: { title: `案例流程：${caseData.case_name}`, mermaid: '' },
             similar_cases: [],
-            ai_suggestions: [],
+            ai_suggestions: caseData.generation_ai_response?.ai_suggestions || [],
+            agent_trace: caseData.generation_ai_response?.agent_trace || null,
+            generation_ai_response: caseData.generation_ai_response || null,
         };
         displayResult(currentData);
         editCurrentPlan();

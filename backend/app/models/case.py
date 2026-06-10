@@ -53,6 +53,7 @@ class ProcessCase(BaseModel):
     drawing_parse_result: DrawingParseResult
     source_files: List[CaseSourceFile] = Field(default_factory=list)
     external_conditions: Optional[dict] = None
+    generation_ai_response: Optional[dict] = None
 
     process_plan: ProcessPlan
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, create_engine, text
+from sqlalchemy import DateTime, Integer, String, Text, create_engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
@@ -23,6 +23,7 @@ class CaseRecord(Base):
     process_plan_json: Mapped[str] = mapped_column(Text, nullable=False)
     source_files_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     external_conditions_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    generation_ai_response_json: Mapped[str | None] = mapped_column(LONGTEXT().with_variant(Text, "sqlite"), nullable=True)
     human_edits_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     ai_errors_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="draft")
@@ -75,6 +76,22 @@ def init_db() -> None:
         Base.metadata.create_all(bind=engine)
         if engine.dialect.name == "mysql":
             with engine.begin() as connection:
+                columns = {column["name"] for column in inspect(connection).get_columns("cases")}
+                if "generation_ai_response_json" not in columns:
+                    connection.execute(
+                        text(
+                            "ALTER TABLE cases "
+                            "ADD COLUMN generation_ai_response_json LONGTEXT NULL "
+                            "AFTER external_conditions_json"
+                        )
+                    )
+                else:
+                    connection.execute(
+                        text(
+                            "ALTER TABLE cases "
+                            "MODIFY generation_ai_response_json LONGTEXT NULL"
+                        )
+                    )
                 connection.execute(
                     text(
                         "ALTER TABLE case_annotation_results "
