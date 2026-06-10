@@ -11,10 +11,10 @@ ENV_FILE = BASE_DIR / ".env"
 
 class Settings(BaseSettings):
     # AI 大模型配置
-    ai_model_provider: str = "openai"
+    ai_model_provider: str = ""
     ai_api_key: str = ""
-    ai_api_base: str = "http://new.zhushouzl.cloud/v1"
-    ai_model_name: str = "gpt-5.5"
+    ai_api_base: str = ""
+    ai_model_name: str = ""
     ai_timeout_seconds: float = 500
 
     # OCR 配置
@@ -23,10 +23,10 @@ class Settings(BaseSettings):
     ocr_api_secret: str = ""
 
     # 视觉识别配置
-    vision_provider: str = "openai"
+    vision_provider: str = ""
     vision_api_key: str = ""
-    vision_api_base: str = "http://new.zhushouzl.cloud/v1"
-    vision_model: str = "gpt-5.5"
+    vision_api_base: str = ""
+    vision_model: str = ""
 
     # Agent 配置
     agent_enabled: bool = True
