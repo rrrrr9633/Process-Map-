@@ -374,7 +374,12 @@ input[type="file"]:focus {
 }
 
 .progress-step-spinner {
+    display: none;
     color: var(--black);
+}
+
+.progress-step.active .progress-step-spinner {
+    display: inline-block;
 }
 
 .progress-step strong,

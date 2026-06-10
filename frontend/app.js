@@ -3,6 +3,8 @@ const API_BASE = window.location.hostname === 'localhost' || window.location.hos
     ? 'http://localhost:8080/api'
     : DEPLOYED_API_BASE;
 
+const MIN_PROGRESS_STAGE_VISIBLE_MS = 4000;
+
 // 全局状态
 let currentData = null;
 let currentCaseId = null;
@@ -11,6 +13,10 @@ let generationProgressTimer = null;
 let generationProgressSnapshot = {
     extraItems: [],
     activeKey: 'request',
+    visibleStage: '',
+    visibleDetail: '',
+    visibleActiveKey: 'request',
+    visibleSince: 0,
 };
 let lastJob = null;
 let boundCaseSourceFiles = null;
@@ -270,7 +276,7 @@ function renderGenerationProgress(stage, detail, startedAt, extraItems = [], act
                 <strong data-progress-stage>${escapeHtml(stage)}</strong>
                 <span data-progress-elapsed>已等待 ${elapsedSeconds} 秒</span>
             </div>
-            <div class="progress-current"><span class="progress-inline-spinner"></span><span data-progress-detail>${escapeHtml(detail)}</span></div>
+            <div class="progress-current"><span data-progress-detail>${escapeHtml(detail)}</span></div>
             <div class="progress-steps">
                 ${items.map(item => `
                     <div class="progress-step ${item.key === activeKey ? 'active' : ''}" data-progress-key="${escapeHtml(item.key)}">
@@ -308,7 +314,14 @@ function renderGenerationFailure(stage, detail, startedAt, extraItems = []) {
 function showGenerationFailure(stage, detail, startedAt, extraItems = []) {
     const loading = document.getElementById('generate-loading');
     if (!loading) return;
-    generationProgressSnapshot = { extraItems: [], activeKey: 'failed' };
+    generationProgressSnapshot = {
+        extraItems: [],
+        activeKey: 'failed',
+        visibleStage: stage,
+        visibleDetail: detail,
+        visibleActiveKey: 'failed',
+        visibleSince: Date.now(),
+    };
     loading.innerHTML = renderGenerationFailure(stage, detail, startedAt, extraItems);
     loading.classList.add('active');
 }
@@ -337,18 +350,46 @@ function stabilizeProgressActiveKey(activeKey) {
     return activeKey;
 }
 
+function getVisibleProgressState(stage, detail, activeKey) {
+    const now = Date.now();
+    const current = generationProgressSnapshot;
+    const hasVisibleState = current.visibleStage && current.visibleDetail;
+    const isSameState = current.visibleStage === stage
+        && current.visibleDetail === detail
+        && current.visibleActiveKey === activeKey;
+    const canSwitch = !hasVisibleState
+        || isSameState
+        || now - (current.visibleSince || 0) >= MIN_PROGRESS_STAGE_VISIBLE_MS
+        || activeKey === 'failed'
+        || activeKey === 'result';
+
+    if (canSwitch) {
+        current.visibleStage = stage;
+        current.visibleDetail = detail;
+        current.visibleActiveKey = activeKey;
+        current.visibleSince = isSameState ? current.visibleSince : now;
+    }
+
+    return {
+        stage: current.visibleStage || stage,
+        detail: current.visibleDetail || detail,
+        activeKey: current.visibleActiveKey || activeKey,
+    };
+}
+
 function updateGenerationProgressDom(stage, detail, startedAt, extraItems = [], activeKey = 'backend') {
     const loading = document.getElementById('generate-loading');
     if (!loading) return;
 
     activeKey = stabilizeProgressActiveKey(activeKey);
+    const visible = getVisibleProgressState(stage, detail, activeKey);
 
     const incomingKeys = extraItems.map(item => item?.key).filter(Boolean).sort().join('|');
     const currentKeys = generationProgressSnapshot.extraItems.map(item => item.key).sort().join('|');
     const needsFullRender = !loading.querySelector('.progress-panel') || (incomingKeys && incomingKeys !== currentKeys);
 
     if (needsFullRender) {
-        loading.innerHTML = renderGenerationProgress(stage, detail, startedAt, extraItems, activeKey);
+        loading.innerHTML = renderGenerationProgress(visible.stage, visible.detail, startedAt, extraItems, visible.activeKey);
         loading.classList.add('active');
         return;
     }
@@ -357,12 +398,12 @@ function updateGenerationProgressDom(stage, detail, startedAt, extraItems = [], 
     const stageNode = loading.querySelector('[data-progress-stage]');
     const elapsedNode = loading.querySelector('[data-progress-elapsed]');
     const detailNode = loading.querySelector('[data-progress-detail]');
-    if (stageNode) stageNode.textContent = stage;
+    if (stageNode) stageNode.textContent = visible.stage;
     if (elapsedNode) elapsedNode.textContent = `已等待 ${elapsedSeconds} 秒`;
-    if (detailNode) detailNode.textContent = detail;
+    if (detailNode) detailNode.textContent = visible.detail;
 
     loading.querySelectorAll('.progress-step').forEach(step => {
-        step.classList.toggle('active', step.dataset.progressKey === activeKey);
+        step.classList.toggle('active', step.dataset.progressKey === visible.activeKey);
     });
     loading.classList.add('active');
 }
@@ -652,7 +693,14 @@ async function generateProcess() {
     const loading = document.getElementById('generate-loading');
     const result = document.getElementById('generate-result');
     const startedAt = Date.now();
-    generationProgressSnapshot = { extraItems: [], activeKey: 'request' };
+    generationProgressSnapshot = {
+        extraItems: [],
+        activeKey: 'request',
+        visibleStage: '',
+        visibleDetail: '',
+        visibleActiveKey: 'request',
+        visibleSince: 0,
+    };
     
     result.classList.remove('active');
     startGenerationProgressTimer(

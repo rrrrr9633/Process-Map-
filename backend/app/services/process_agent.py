@@ -293,6 +293,58 @@ class ProcessAgent:
         )
         return images
 
+    def _agent_explanation_context(self, explanations: list[DrawingExplanation]) -> list[dict[str, Any]]:
+        contexts: list[dict[str, Any]] = []
+        for explanation in explanations:
+            page_items: list[dict[str, Any]] = []
+            page_explanations = explanation.page_explanations or []
+            if not page_explanations and (
+                explanation.visual_summary
+                or explanation.detected_features
+                or explanation.related_operations
+                or explanation.annotation_result.annotations
+            ):
+                page_explanations = [explanation]
+            for page_explanation in page_explanations:
+                page = getattr(page_explanation, "page", explanation.page_index or 1)
+                annotations = getattr(page_explanation, "annotation_result", None)
+                annotation_count = len(annotations.annotations) if annotations else 0
+                view_items = [
+                    {
+                        "view_index": view.view_index,
+                        "label": view.label,
+                        "visual_summary": view.visual_summary,
+                        "detected_features": view.detected_features,
+                        "related_operations": view.related_operations,
+                        "risk_notes": view.risk_notes,
+                    }
+                    for view in (getattr(page_explanation, "view_explanations", None) or [])
+                ]
+                page_items.append(
+                    {
+                        "page": page,
+                        "visual_summary": getattr(page_explanation, "visual_summary", "") or explanation.visual_summary,
+                        "detected_features": getattr(page_explanation, "detected_features", []) or explanation.detected_features,
+                        "related_operations": getattr(page_explanation, "related_operations", []) or explanation.related_operations,
+                        "risk_notes": getattr(page_explanation, "risk_notes", []) or explanation.risk_notes,
+                        "view_explanations": view_items,
+                        "annotation_count": annotation_count,
+                    }
+                )
+            contexts.append(
+                {
+                    "file_index": explanation.file_index,
+                    "file_name": explanation.file_name,
+                    "page_count": explanation.page_count,
+                    "visual_summary": explanation.visual_summary,
+                    "detected_features": explanation.detected_features,
+                    "related_operations": explanation.related_operations,
+                    "risk_notes": explanation.risk_notes,
+                    "pages": page_items,
+                }
+            )
+        return contexts
+
     def _image_payloads_from_explanations(
         self,
         explanations: list[DrawingExplanation],
