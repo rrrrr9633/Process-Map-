@@ -250,13 +250,14 @@ function getGenerationProgressItems(extraItems = []) {
     const baseItems = [
         { key: 'request', label: '前端请求', value: '已准备生成参数并发起请求' },
         { key: 'upload', label: '文件上传', value: '正在把图纸文件发送到后端' },
-        { key: 'backend', label: '后端预处理', value: '复用或保存文件，准备图纸渲染和 AI 识别输入' },
-        { key: 'ai-prepare', label: 'AI 准备请求', value: '整理图纸图像、参考流程和模型参数' },
-        { key: 'ai-connect', label: 'AI 连接模型', value: '请求已发出，等待模型建立响应或首段内容' },
-        { key: 'ai-generate', label: 'AI 生成内容', value: '模型正在生成结构化工序、流程图和确认项' },
-        { key: 'ai-timeout', label: 'AI 超时边界', value: '等待模型返回；失败后任务会明确失败' },
-        { key: 'failed', label: '失败处理', value: '任务失败后停留在当前页，清空旧结果并展示失败原因' },
-        { key: 'result', label: '结果返回', value: '仅当任务完成并返回工序方案后，才展示结果' },
+        { key: 'backend', label: '等待后端创建任务', value: '文件已上传，等待后端返回任务 ID' },
+        { key: 'uploaded', label: '任务已创建', value: '后端已接收文件并创建任务' },
+        { key: 'rendering', label: '图纸渲染', value: '后端正在把图纸转换为可识别页面' },
+        { key: 'explaining', label: '图纸识别', value: '后端正在逐份逐页生成图解和识别结果' },
+        { key: 'bubble_generating', label: '气泡图生成', value: '后端正在生成气泡图和标注导出数据' },
+        { key: 'flow_generating', label: '工序方案生成', value: '后端正在基于真实图解结果生成工序方案' },
+        { key: 'failed', label: '失败处理', value: '后端任务失败后停留在当前页并展示失败原因' },
+        { key: 'completed', label: '结果返回', value: '后端任务完成并返回工序方案' },
     ];
     const merged = new Map(baseItems.map(item => [item.key, item]));
     for (const item of [...generationProgressSnapshot.extraItems, ...extraItems]) {
@@ -327,18 +328,26 @@ function showGenerationFailure(stage, detail, startedAt, extraItems = []) {
 }
 
 function getProgressRank(activeKey) {
-    const ranks = {
-        request: 0,
-        upload: 1,
-        backend: 2,
-        'ai-prepare': 3,
-        'ai-connect': 4,
-        'ai-generate': 5,
-        'ai-timeout': 6,
-        failed: 7,
-        result: 8,
-    };
-    return ranks[activeKey] ?? 0;
+    const orderedKeys = [
+        'request',
+        'upload',
+        'backend',
+        'queued',
+        'created',
+        'uploading',
+        'uploaded',
+        'rendering',
+        'preprocessing',
+        'preprocess',
+        'explaining',
+        'bubble_generating',
+        'flow_generating',
+        'failed',
+        'completed',
+        'result',
+    ];
+    const index = orderedKeys.indexOf(activeKey);
+    return index >= 0 ? index : orderedKeys.indexOf('uploaded');
 }
 
 function stabilizeProgressActiveKey(activeKey) {
@@ -436,59 +445,13 @@ function startGenerationProgressTimer(stage, detail, startedAt, extraItems = [],
     }, 1000);
 }
 
-function getAiWaitStage(elapsedSeconds) {
-    if (elapsedSeconds < 8) {
-        return {
-            stage: 'AI 准备请求',
-            detail: '后端正在整理图纸图片、参考流程和模型请求参数。',
-            activeKey: 'ai-prepare',
-        };
-    }
-    if (elapsedSeconds < 20) {
-        return {
-            stage: 'AI 连接模型',
-            detail: '后端正在连接 AI 接口并等待模型开始返回内容；如果终端没有 first content，通常卡在网络或模型排队。',
-            activeKey: 'ai-connect',
-        };
-    }
-    if (elapsedSeconds < 120) {
-        return {
-            stage: 'AI 生成结构化方案',
-            detail: '模型正在生成图纸理解、工序拆分、流程图和人工确认项；终端会显示 chunk 和字符数增长。',
-            activeKey: 'ai-generate',
-        };
-    }
-    return {
-        stage: 'AI 等待超时边界',
-        detail: 'AI 已等待较久（后端/网关建议 ≥500 秒）；如果终端没有持续 chunks，优先检查 Nginx proxy_read_timeout 与 new-api 网关超时。失败后任务会明确失败，不再展示旧结果。',
-        activeKey: 'ai-timeout',
-    };
-}
-
-function startAiProgressTimer(startedAt, extraItems = []) {
-    stopGenerationProgressTimer();
-    const render = () => {
-        const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-        const stage = getAiWaitStage(elapsedSeconds);
-        setGenerationProgress(stage.stage, stage.detail, startedAt, extraItems, stage.activeKey);
-    };
-    render();
-    generationProgressTimer = setInterval(render, 1000);
-}
-
 function getProcessJobActiveKey(job) {
-    if (!job) return 'backend';
-    if (job.status === 'completed' || job.stage === 'completed') return 'result';
+    if (!job) return 'uploaded';
+    if (job.status === 'completed' || job.stage === 'completed') return 'completed';
     if (job.status === 'failed' || job.stage === 'failed') return 'failed';
 
     const stage = String(job.stage || '').toLowerCase();
-    if (['queued', 'created', 'uploading', 'uploaded'].includes(stage)) return 'upload';
-    if (['rendering', 'preprocessing', 'preprocess', 'backend'].includes(stage)) return 'backend';
-    if (['preparing', 'ai_prepare', 'ai-prepare'].includes(stage)) return 'ai-prepare';
-    if (['connecting', 'ai_connect', 'ai-connect'].includes(stage)) return 'ai-connect';
-    if (['explaining', 'bubble_generating', 'flow_generating', 'generating', 'ai_generate', 'ai-generate'].includes(stage)) return 'ai-generate';
-    if (['timeout', 'ai_timeout', 'ai-timeout'].includes(stage)) return 'ai-timeout';
-    return 'backend';
+    return stage || 'uploaded';
 }
 
 async function pollProcessJob(jobId, startedAt, uploadInfo) {
@@ -501,11 +464,15 @@ async function pollProcessJob(jobId, startedAt, uploadInfo) {
         const job = await response.json();
         lastJob = job;
         const isFailed = job.status === 'failed' || job.stage === 'failed';
+        const aiPreview = String(job.ai_stream_preview || '').trim();
+        const jobDetail = isFailed
+            ? `失败原因：${job.error || job.message || '任务失败'}；已生成图解 ${job.explanations?.length || 0} 份，未生成可用工序结果。`
+            : aiPreview
+                ? `阶段：${job.stage}；进度：${job.progress || 0}%；AI 已接收 ${job.ai_stream_chunks || 0} 段内容：${aiPreview}`
+                : `阶段：${job.stage}；进度：${job.progress || 0}%；已生成图解 ${job.explanations?.length || 0} 份。`;
         setGenerationProgress(
             job.message || (isFailed ? '任务失败' : '任务处理中'),
-            isFailed
-                ? `失败原因：${job.error || job.message || '任务失败'}；已生成图解 ${job.explanations?.length || 0} 份，未生成可用工序结果。`
-                : `阶段：${job.stage}；进度：${job.progress || 0}%；已生成图解 ${job.explanations?.length || 0} 份。`,
+            jobDetail,
             startedAt,
             [
                 { key: 'job-id', label: '任务 ID', value: job.job_id },
@@ -527,16 +494,6 @@ async function uploadWithJobProgress(url, formData, startedAt, uploadInfo) {
         throw new Error(`HTTP ${response.status}: ${errorText}`);
     }
     const job = await response.json();
-    setGenerationProgress(
-        '任务已创建，等待后端处理',
-        `任务 ${job.job_id} 已创建，后端会逐份图解 PDF、生成气泡图并汇总流程。`,
-        startedAt,
-        [
-            { key: 'job-id', label: '任务 ID', value: job.job_id },
-            { key: 'upload-files', label: '上传文件', value: uploadInfo.name },
-        ],
-        'backend',
-    );
     return pollProcessJob(job.job_id, startedAt, uploadInfo);
 }
 
@@ -649,12 +606,16 @@ function requestWithUploadProgress(url, formData, startedAt, uploadInfo) {
             );
         };
         xhr.upload.onload = () => {
-            startAiProgressTimer(
+            stopGenerationProgressTimer();
+            setGenerationProgress(
+                '上传完成，等待后端创建任务',
+                '文件已传输完成，正在等待后端返回任务 ID；后续进度只展示后端任务状态。',
                 startedAt,
                 [
                     { key: 'upload-files', label: '上传文件', value: uploadInfo.name },
                     { key: 'upload-size', label: '总大小', value: formatFileSize(uploadInfo.size) },
                 ],
+                'backend',
             );
         };
         xhr.onload = () => {

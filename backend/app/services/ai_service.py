@@ -77,8 +77,8 @@ class AIService:
         pdf_text: str,
         image_payloads: list[dict[str, str]],
         mode: str,
-        fallback_plan: dict[str, Any],
         per_file_explanations: list[dict[str, Any]] | None = None,
+        on_stream_delta: Any | None = None,
     ) -> dict[str, Any]:
         if not self.enabled:
             raise AIServiceError("AI Agent 未启用：未配置 AI_API_KEY")
@@ -92,7 +92,6 @@ class AIService:
                         "mode": mode,
                         "pdf_text": pdf_text[: settings.agent_max_pdf_text_chars],
                         "image_count": len(image_payloads),
-                        "fallback_plan": fallback_plan,
                         "per_file_explanations": per_file_explanations or [],
                         "output_schema": self._agent_output_schema(),
                         "rules": [
@@ -138,7 +137,7 @@ class AIService:
             "response_format": {"type": "json_object"},
         }
 
-        result = await self._chat_completion(payload)
+        result = await self._chat_completion(payload, on_stream_delta=on_stream_delta)
         parsed = self._extract_json(result)
         if not parsed:
             raise AIServiceError(f"AI Agent 返回了非结构化结果：{result.strip()}")
@@ -155,6 +154,7 @@ class AIService:
         ocr_text: str = "",
         view_label: str = "",
         view_region: dict[str, float] | None = None,
+        on_stream_delta: Any | None = None,
     ) -> dict[str, Any]:
         if not self.enabled:
             raise AIServiceError("AI Agent 未启用：未配置 AI_API_KEY")
@@ -211,7 +211,7 @@ class AIService:
             "temperature": 0.1,
             "response_format": {"type": "json_object"},
         }
-        result = await self._chat_completion(payload)
+        result = await self._chat_completion(payload, on_stream_delta=on_stream_delta)
         parsed = self._extract_json(result)
         if not parsed:
             raise AIServiceError(f"AI 单图图解返回了非结构化结果：{result.strip()}")
@@ -403,7 +403,7 @@ class AIService:
             "questions": [{"field": "缺失字段", "question": "需要用户确认的问题", "reason": "原因", "severity": "warning"}],
         }
 
-    async def _chat_completion(self, payload: dict[str, Any]) -> str:
+    async def _chat_completion(self, payload: dict[str, Any], on_stream_delta: Any | None = None) -> str:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -418,7 +418,7 @@ class AIService:
 
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             print("[ai] stream request start: json_mode=true", flush=True)
-            response = await self._post_stream(client, headers, stream_payload)
+            response = await self._post_stream(client, headers, stream_payload, on_stream_delta=on_stream_delta)
             if response is not None:
                 elapsed_ms = int((perf_counter() - request_started_at) * 1000)
                 print(f"[ai] stream request done in {elapsed_ms}ms, chars={len(response)}", flush=True)
@@ -428,7 +428,7 @@ class AIService:
                 fallback_payload = dict(stream_payload)
                 fallback_payload.pop("response_format", None)
                 print("[ai] stream retry start: json_mode=false", flush=True)
-                response = await self._post_stream(client, headers, fallback_payload)
+                response = await self._post_stream(client, headers, fallback_payload, on_stream_delta=on_stream_delta)
                 if response is not None:
                     elapsed_ms = int((perf_counter() - request_started_at) * 1000)
                     print(f"[ai] stream retry done in {elapsed_ms}ms, chars={len(response)}", flush=True)
@@ -441,6 +441,7 @@ class AIService:
         client: httpx.AsyncClient,
         headers: dict[str, str],
         payload: dict[str, Any],
+        on_stream_delta: Any | None = None,
     ) -> str | None:
         content_parts: list[str] = []
         chunk_count = 0
@@ -472,6 +473,11 @@ class AIService:
                             print(f"[ai] first content chunk received in {elapsed_ms}ms", flush=True)
                         chunk_count += 1
                         content_parts.append(str(content))
+                        if on_stream_delta:
+                            try:
+                                on_stream_delta(str(content), chunk_count, "".join(content_parts))
+                            except Exception as exc:
+                                print(f"[ai] stream callback failed: {type(exc).__name__}: {exc}", flush=True)
                         if chunk_count % 20 == 0:
                             print(f"[ai] streaming content: chunks={chunk_count}, chars={sum(len(part) for part in content_parts)}", flush=True)
         content = "".join(content_parts).strip()

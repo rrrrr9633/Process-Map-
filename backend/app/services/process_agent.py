@@ -18,14 +18,12 @@ from app.models.process import Operation, ProcessMode, ProcessPlan
 from app.services.ai_service import AIServiceError, ai_service
 from app.services.drawing_parser import DrawingParser
 from app.services.flow_builder import FlowBuilder
-from app.services.process_generator import ProcessGenerator
 from app.services.process_validator import ProcessValidator
 
 
 class ProcessAgent:
     def __init__(self) -> None:
         self.parser = DrawingParser()
-        self.generator = ProcessGenerator()
         self.flow_builder = FlowBuilder()
         self.validator = ProcessValidator()
 
@@ -51,68 +49,28 @@ class ProcessAgent:
             )
 
         image_payloads = self._extract_images(path, trace)
-        fallback_plan = self.generator.generate(parse_result, mode)
-        trace.artifacts.append(
-            AgentArtifact(
-                kind="fallback",
-                title="旧规则兜底方案",
-                content=fallback_plan.model_dump(mode="json"),
-                confidence=0.35,
-            )
-        )
+        if not settings.agent_enabled:
+            raise AIServiceError("AI Agent 未启用，无法生成真实图纸流程")
+        if not ai_service.enabled:
+            raise AIServiceError("AI Agent 未配置密钥，无法生成真实图纸流程")
 
-        if settings.agent_enabled and ai_service.enabled:
-            try:
-                trace.stages.append("AI Agent 读取图纸页面、标注和文字")
-                agent_payload = await ai_service.analyze_drawing_for_process_flow(
-                    goal=settings.agent_goal,
-                    pdf_text=parse_result.raw_text or "",
-                    image_payloads=image_payloads,
-                    mode=mode.value,
-                    fallback_plan=fallback_plan.model_dump(mode="json"),
-                )
-                trace.used_ai = True
-                trace.used_vision = bool(image_payloads)
-                return self._build_agent_response(agent_payload, fallback_plan, parse_result, trace, mode)
-            except AIServiceError as exc:
-                trace.questions.append(
-                    AgentQuestion(
-                        field="ai_agent",
-                        question="AI Agent 未能完成结构化图纸拆分，是否允许检查模型配置或更换视觉模型？",
-                        reason=str(exc),
-                        severity="critical",
-                    )
-                )
-            except Exception as exc:
-                trace.questions.append(
-                    AgentQuestion(
-                        field="ai_agent",
-                        question="AI Agent 运行异常，是否使用旧规则结果临时确认？",
-                        reason=f"{type(exc).__name__}: {exc}",
-                        severity="critical",
-                    )
-                )
-
-        trace.fallback_used = True
-        trace.stages.append("回退到旧规则方案")
-        fallback_plan.requires_manual_review = True
-        fallback_plan.validation_issues = self.validator.validate(parse_result, fallback_plan)
-        flow = self.flow_builder.build(fallback_plan)
-        return AgentProcessResponse(
-            parse_result=parse_result,
-            annotation_result=DrawingAnnotationResult(),
-            process_plan=fallback_plan,
-            flow=flow,
-            similar_cases=[],
-            ai_suggestions=["当前使用旧规则兜底：结果只适合做临时参考，不应视为真实图纸拆分结果"],
-            agent_trace=trace,
+        trace.stages.append("AI Agent 读取图纸页面、标注和文字")
+        agent_payload = await ai_service.analyze_drawing_for_process_flow(
+            goal=settings.agent_goal,
+            pdf_text=parse_result.raw_text or "",
+            image_payloads=image_payloads,
+            mode=mode.value,
         )
+        trace.used_ai = True
+        trace.used_vision = bool(image_payloads)
+        return self._build_agent_response(agent_payload, parse_result, trace, mode)
 
     async def run_from_files(
         self,
         file_paths: list[str | Path],
         mode: ProcessMode = ProcessMode.STANDARD_8,
         explanations: list[DrawingExplanation] | None = None,
+        on_stream_delta: Any | None = None,
     ) -> AgentProcessResponse:
         trace = AgentRunTrace(goal=f"{settings.agent_goal}，并合并多份分步图纸为工人生产指导流程")
         trace.stages.append(f"接收分步图纸 {len(file_paths)} 份")
@@ -137,17 +95,7 @@ class ProcessAgent:
             trace.stages.append(f"完成第 {index} 份图纸本地解析：{path.name}")
 
         if not parse_results:
-            fallback_parse = DrawingParseResult(risk_flags=[RiskFlag(field="files", message="未收到可分析的图纸文件", severity="critical")])
-            fallback_plan = self.generator.generate(fallback_parse, mode)
-            return AgentProcessResponse(
-                parse_result=fallback_parse,
-                annotation_result=DrawingAnnotationResult(),
-                process_plan=fallback_plan,
-                flow=self.flow_builder.build(fallback_plan),
-                similar_cases=[],
-                ai_suggestions=["未收到可分析的图纸文件"],
-                agent_trace=trace,
-            )
+            raise AIServiceError("未收到可分析的图纸文件")
 
         parse_result = parse_results[0].model_copy(deep=True)
         parse_result.raw_text = "\n\n".join([item.raw_text or "" for item in parse_results if item.raw_text])
@@ -157,16 +105,6 @@ class ProcessAgent:
             parse_result.technical_requirements.extend(item.technical_requirements)
             parse_result.inspection_requirements.extend(item.inspection_requirements)
             parse_result.risk_flags.extend(item.risk_flags)
-
-        fallback_plan = self.generator.generate(parse_result, mode)
-        trace.artifacts.append(
-            AgentArtifact(
-                kind="fallback",
-                title="批量图纸本地兜底方案",
-                content=fallback_plan.model_dump(mode="json"),
-                confidence=0.35,
-            )
-        )
 
         if not settings.agent_enabled:
             raise AIServiceError("AI Agent 未启用，批量图纸无法生成真实合并流程")
@@ -185,14 +123,14 @@ class ProcessAgent:
             pdf_text=parse_result.raw_text or "",
             image_payloads=image_payloads,
             mode=mode.value,
-            fallback_plan=fallback_plan.model_dump(mode="json"),
             per_file_explanations=per_file_explanations,
+            on_stream_delta=on_stream_delta,
         )
         elapsed_ms = int((perf_counter() - ai_started_at) * 1000)
         print(f"[process] batch ai done in {elapsed_ms}ms", flush=True)
         trace.used_ai = True
         trace.used_vision = bool(image_payloads)
-        response = self._build_agent_response(payload, fallback_plan, parse_result, trace, mode)
+        response = self._build_agent_response(payload, parse_result, trace, mode)
         if explanations:
             merged = merge_annotation_results([item.annotation_result for item in explanations])
             if merged.annotations:
@@ -207,41 +145,21 @@ class ProcessAgent:
         trace = AgentRunTrace(goal=settings.agent_goal)
         trace.stages.append("接收图纸文字")
         parse_result = self.parser.parse_text(text)
-        fallback_plan = self.generator.generate(parse_result, mode)
 
-        if settings.agent_enabled and ai_service.enabled:
-            try:
-                trace.stages.append("AI Agent 基于文字拆分流程")
-                payload = await ai_service.analyze_drawing_for_process_flow(
-                    goal=settings.agent_goal,
-                    pdf_text=text,
-                    image_payloads=[],
-                    mode=mode.value,
-                    fallback_plan=fallback_plan.model_dump(mode="json"),
-                )
-                trace.used_ai = True
-                return self._build_agent_response(payload, fallback_plan, parse_result, trace, mode)
-            except Exception as exc:
-                trace.questions.append(
-                    AgentQuestion(
-                        field="ai_agent",
-                        question="AI Agent 文字拆分失败，是否使用旧规则结果临时确认？",
-                        reason=f"{type(exc).__name__}: {exc}",
-                        severity="warning",
-                    )
-                )
+        if not settings.agent_enabled:
+            raise AIServiceError("AI Agent 未启用，无法生成真实文字流程")
+        if not ai_service.enabled:
+            raise AIServiceError("AI Agent 未配置密钥，无法生成真实文字流程")
 
-        trace.fallback_used = True
-        flow = self.flow_builder.build(fallback_plan)
-        return AgentProcessResponse(
-            parse_result=parse_result,
-            annotation_result=DrawingAnnotationResult(),
-            process_plan=fallback_plan,
-            flow=flow,
-            similar_cases=[],
-            ai_suggestions=["当前使用旧规则兜底"],
-            agent_trace=trace,
+        trace.stages.append("AI Agent 基于文字拆分流程")
+        payload = await ai_service.analyze_drawing_for_process_flow(
+            goal=settings.agent_goal,
+            pdf_text=text,
+            image_payloads=[],
+            mode=mode.value,
         )
+        trace.used_ai = True
+        return self._build_agent_response(payload, parse_result, trace, mode)
 
     def _extract_images(self, path: Path, trace: AgentRunTrace) -> list[dict[str, str]]:
         suffix = path.suffix.lower()
@@ -407,13 +325,12 @@ class ProcessAgent:
     def _build_agent_response(
         self,
         payload: dict[str, Any],
-        fallback_plan: ProcessPlan,
         fallback_parse_result: DrawingParseResult,
         trace: AgentRunTrace,
         mode: ProcessMode,
     ) -> AgentProcessResponse:
         parse_result = self._coerce_parse_result(payload.get("parse_result"), fallback_parse_result)
-        process_plan = self._coerce_process_plan(payload.get("process_plan"), fallback_plan, mode)
+        process_plan = self._coerce_process_plan(payload.get("process_plan"), mode)
         self._normalize_worker_guidance(process_plan)
         self._append_agent_questions(payload.get("questions"), trace)
 
@@ -690,18 +607,16 @@ class ProcessAgent:
             return f"{source_text.strip()}；{note}"
         return note
 
-    def _coerce_process_plan(self, value: Any, fallback: ProcessPlan, mode: ProcessMode) -> ProcessPlan:
+    def _coerce_process_plan(self, value: Any, mode: ProcessMode) -> ProcessPlan:
         if not isinstance(value, dict):
-            fallback.requires_manual_review = True
-            return fallback
+            raise AIServiceError("AI Agent 未返回有效 process_plan，已拒绝使用旧规则兜底")
         candidate = dict(value)
         candidate.setdefault("mode", mode.value)
         candidate.setdefault("validation_issues", [])
         try:
             return ProcessPlan.model_validate(candidate)
-        except ValidationError:
-            fallback.requires_manual_review = True
-            return fallback
+        except ValidationError as exc:
+            raise AIServiceError(f"AI Agent 返回的 process_plan 结构不兼容：{exc.errors()[0]['msg']}") from exc
 
     def _normalize_worker_guidance(self, process_plan: ProcessPlan) -> None:
         for operation in process_plan.operations:

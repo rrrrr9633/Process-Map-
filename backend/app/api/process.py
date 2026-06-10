@@ -172,11 +172,17 @@ async def _run_sync_explanation_pipeline(
     job_service.complete(job_id)
     return job_id, explanations, result
 
-async def _explain_process_job_file(job_id: str, file_path: str, file_index: int) -> DrawingExplanation:
+async def _explain_process_job_file(
+    job_id: str,
+    file_path: str,
+    file_index: int,
+    on_stream_delta=None,
+) -> DrawingExplanation:
     return await drawing_explanation_service.explain_file(
         file_path,
         job_service.pages_dir(job_id),
         file_index,
+        on_stream_delta=on_stream_delta,
     )
 
 
@@ -185,8 +191,32 @@ async def _run_process_job(job_id: str, file_paths: list[str], mode: ProcessMode
         total = max(1, len(file_paths))
         job_service.update(job_id, stage="rendering", status="running", progress=5, message=f"开始渲染并识别 {total} 份图纸")
 
+        def on_explanation_stream_delta(file_index: int, delta: str, chunk_count: int, content: str) -> None:
+            progress = min(55, 10 + chunk_count // 10)
+            job_service.update(
+                job_id,
+                stage="explaining",
+                status="running",
+                progress=progress,
+                message=f"第 {file_index} 份图纸 AI 图解中，已接收 {chunk_count} 段内容",
+                ai_stream_preview=content,
+                ai_stream_chunks=chunk_count,
+            )
+
         tasks = [
-            asyncio.create_task(_explain_process_job_file(job_id, file_path, index))
+            asyncio.create_task(
+                _explain_process_job_file(
+                    job_id,
+                    file_path,
+                    index,
+                    on_stream_delta=lambda delta, chunk_count, content, file_index=index: on_explanation_stream_delta(
+                        file_index,
+                        delta,
+                        chunk_count,
+                        content,
+                    ),
+                )
+            )
             for index, file_path in enumerate(file_paths, start=1)
         ]
         pending = set(tasks)
@@ -238,7 +268,25 @@ async def _run_process_job(job_id: str, file_paths: list[str], mode: ProcessMode
         job_service.set_explanations(job_id, explanations)
 
         job_service.update(job_id, stage="flow_generating", status="running", progress=75, message=f"正在基于 {total} 份图纸汇总生成工艺流程")
-        agent_response = await process_agent.run_from_files(file_paths, mode, explanations=explanations)
+
+        def on_flow_stream_delta(delta: str, chunk_count: int, content: str) -> None:
+            progress = min(95, 75 + chunk_count // 8)
+            job_service.update(
+                job_id,
+                stage="flow_generating",
+                status="running",
+                progress=progress,
+                message=f"AI 正在生成工艺流程，已接收 {chunk_count} 段内容",
+                ai_stream_preview=content,
+                ai_stream_chunks=chunk_count,
+            )
+
+        agent_response = await process_agent.run_from_files(
+            file_paths,
+            mode,
+            explanations=explanations,
+            on_stream_delta=on_flow_stream_delta,
+        )
         result = ProcessGenerationResponse(
             parse_result=agent_response.parse_result,
             annotation_result=agent_response.annotation_result,

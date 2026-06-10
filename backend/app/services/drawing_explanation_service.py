@@ -152,7 +152,13 @@ class DrawingExplanationService:
         except Exception:
             return None
 
-    async def explain_file(self, source_path: str | Path, target_dir: str | Path, file_index: int) -> DrawingExplanation:
+    async def explain_file(
+        self,
+        source_path: str | Path,
+        target_dir: str | Path,
+        file_index: int,
+        on_stream_delta: Any | None = None,
+    ) -> DrawingExplanation:
         path = Path(source_path)
         pages = self.render_all_pages(path, target_dir, file_index, path.name)
         explanation = DrawingExplanation(
@@ -185,6 +191,7 @@ class DrawingExplanationService:
                     page_count=explanation.page_count,
                     image_payload=image_payload,
                     ocr_text=ocr_text,
+                    on_stream_delta=on_stream_delta,
                 )
                 annotation_result = self._coerce_annotation_result(
                     payload.get("annotation_result"),
@@ -238,6 +245,7 @@ class DrawingExplanationService:
                         "width": region.width,
                         "height": region.height,
                     },
+                    on_stream_delta=on_stream_delta,
                 )
                 view_annotation = self._coerce_annotation_result(
                     payload.get("annotation_result"),

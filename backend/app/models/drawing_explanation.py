@@ -90,6 +90,8 @@ class ProcessJob(BaseModel):
     files: list[str] = Field(default_factory=list)
     explanations: list[DrawingExplanation] = Field(default_factory=list)
     process_result: dict[str, Any] | None = None
+    ai_stream_preview: str = ""
+    ai_stream_chunks: int = 0
     error: str | None = None
     created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())

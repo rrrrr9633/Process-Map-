@@ -43,6 +43,8 @@ class JobService:
         progress: int | None = None,
         message: str | None = None,
         error: str | None = None,
+        ai_stream_preview: str | None = None,
+        ai_stream_chunks: int | None = None,
     ) -> ProcessJob:
         job = self.get(job_id)
         if stage is not None:
@@ -55,6 +57,10 @@ class JobService:
             job.message = message
         if error is not None:
             job.error = error
+        if ai_stream_preview is not None:
+            job.ai_stream_preview = ai_stream_preview[-2000:]
+        if ai_stream_chunks is not None:
+            job.ai_stream_chunks = max(0, ai_stream_chunks)
         return self.save(job)
 
     def set_explanations(self, job_id: str, explanations: list[DrawingExplanation]) -> ProcessJob:
