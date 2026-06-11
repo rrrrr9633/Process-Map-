@@ -1229,15 +1229,13 @@ function renderReadableFlow(operations = []) {
                     <div class="flow-step-head">
                         <span class="flow-step-index">${index + 1}</span>
                         <div class="flow-step-summary">
-                            <div>
-                                <span class="operation-no">${escapeHtml(op.operation_no || String(index + 1))}</span>
-                                <strong>${escapeHtml(op.operation_name || '未命名工序')}</strong>
-                            </div>
+                            <span class="operation-no">${escapeHtml(op.operation_no || String(index + 1))}</span>
+                            <strong>${escapeHtml(op.operation_name || '未命名工序')}</strong>
                             <small>${escapeHtml(op.content || '暂无工序说明')}</small>
                         </div>
                     </div>
+                    ${(op.targets?.length || op.equipment?.length || op.inspection_items?.length || op.control_points?.length) ? `
                     <div class="flow-step-body">
-                        <p>${escapeHtml(op.content || '暂无工序说明')}</p>
                         <div class="flow-step-meta">
                             ${(op.targets || []).slice(0, 3).map(item => `<span>对象：${escapeHtml(item)}</span>`).join('')}
                             ${(op.equipment || []).slice(0, 2).map(item => `<span>设备：${escapeHtml(item)}</span>`).join('')}
@@ -1249,6 +1247,7 @@ function renderReadableFlow(operations = []) {
                             </div>
                         ` : ''}
                     </div>
+                    ` : ''}
                 </div>
                 ${index < operations.length - 1 ? '<div class="flow-step-arrow">↓</div>' : ''}
             `).join('')}
@@ -1702,6 +1701,9 @@ function displayCases(cases) {
     
     let html = '';
     cases.forEach(c => {
+        const caseId = escapeHtml(c.case_id);
+        const isActive = currentCaseId === c.case_id;
+        html += `<div class="case-row ${isActive ? 'active' : ''}" id="case-row-${caseId}">`;
         html += `<div class="case-item" onclick="loadCase('${escapeHtml(c.case_id)}')">`;
         html += `<div class="case-header">`;
         html += `<span class="case-title">${escapeHtml(c.case_name)}</span>`;
@@ -1724,6 +1726,8 @@ function displayCases(cases) {
         html += `<div style="margin-top:10px;">`;
         html += `<button type="button" class="btn btn-sm btn-danger" onclick="deleteCase(event, '${escapeHtml(c.case_id)}', '${escapeHtml(c.case_name)}')">删除案例和对应文件</button>`;
         html += `</div>`;
+        html += `</div>`;
+        html += `<div id="case-detail-${caseId}" class="case-detail-inline result"></div>`;
         html += `</div>`;
     });
     
@@ -1813,8 +1817,17 @@ async function loadCase(caseId) {
 }
 
 function renderCaseDetail(caseData, annotationStatus, annotationResult) {
-    const container = document.getElementById('case-detail');
+    const detailId = `case-detail-${caseData.case_id}`;
+    const container = document.getElementById(detailId) || document.getElementById('case-detail');
     if (!container) return;
+    document.querySelectorAll('.case-detail-inline').forEach(element => {
+        const shouldKeep = element.id === detailId;
+        element.classList.toggle('active', shouldKeep);
+        if (!shouldKeep) element.innerHTML = '';
+    });
+    document.querySelectorAll('.case-row').forEach(element => {
+        element.classList.toggle('active', element.id === `case-row-${caseData.case_id}`);
+    });
     const sourceFiles = caseData.source_files || [];
     const operations = caseData.process_plan?.operations || [];
     const status = annotationStatus || { status: 'not_started', progress: 0, message: '尚未启动精细标注' };

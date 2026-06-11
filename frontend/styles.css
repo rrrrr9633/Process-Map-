@@ -643,55 +643,67 @@ input[type="file"]:focus {
 
 .readable-flow {
     display: grid;
-    gap: 8px;
+    gap: 0;
 }
 
 .flow-step-card {
-    border: 1px solid var(--border-strong);
+    position: relative;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--black);
     background: var(--white);
+    margin: 0;
 }
 
 .flow-step-head {
     display: grid;
-    grid-template-columns: 42px minmax(0, 1fr);
-    gap: 14px;
-    padding: 14px;
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 12px;
+    align-items: start;
+    padding: 12px 14px;
 }
 
 .flow-step-index {
-    width: 42px;
-    height: 42px;
+    width: 34px;
+    height: 34px;
     display: grid;
     place-items: center;
     background: var(--black);
     color: var(--white);
+    font-size: 13px;
     font-weight: 700;
 }
 
 .flow-step-summary {
+    display: grid;
+    grid-template-columns: auto minmax(160px, 0.36fr) minmax(260px, 1fr);
+    gap: 10px;
+    align-items: baseline;
     min-width: 0;
 }
 
 .flow-step-summary strong,
 .flow-step-summary small {
-    display: block;
+    min-width: 0;
+}
+
+.flow-step-summary .operation-no {
+    align-self: start;
 }
 
 .flow-step-summary strong {
-    margin: 8px 0 2px;
     font-size: 15px;
+    line-height: 1.5;
 }
 
 .flow-step-summary small {
     color: var(--text-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    line-height: 1.6;
+    white-space: normal;
 }
 
 .flow-step-body {
     min-width: 0;
-    padding: 0 14px 14px 70px;
+    padding: 0 14px 12px 66px;
 }
 
 .flow-step-header {
@@ -729,11 +741,13 @@ input[type="file"]:focus {
 }
 
 .flow-step-arrow {
-    width: 42px;
+    width: 43px;
+    height: 18px;
     text-align: center;
     color: var(--text-muted);
-    font-size: 20px;
+    font-size: 15px;
     line-height: 1;
+    margin-left: 3px;
 }
 
 .technical-flow-details {
@@ -1117,13 +1131,36 @@ input[type="file"]:focus {
 
 .case-item {
     padding: 16px;
-    margin-bottom: 10px;
     cursor: pointer;
     transition: background 0.15s ease;
 }
 
 .case-item:hover {
     background: var(--surface-muted);
+}
+
+.case-row {
+    margin-bottom: 10px;
+}
+
+.case-row.active .case-item {
+    border-color: var(--border-strong);
+    background: var(--surface-muted);
+}
+
+.case-detail-inline {
+    display: none;
+    margin: 0 0 14px;
+    border-top: 0;
+}
+
+.case-detail-inline.active {
+    display: block;
+    padding: 16px;
+}
+
+.case-detail-inline > .result-section:last-child {
+    margin-bottom: 0;
 }
 
 .case-header {
@@ -1199,9 +1236,10 @@ span[style] {
         grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
     }
 
-    .flow-step-card > summary {
+    .flow-step-head {
         grid-template-columns: 36px minmax(0, 1fr);
         gap: 10px;
+        padding: 12px;
     }
 
     .flow-step-index {
@@ -1209,8 +1247,17 @@ span[style] {
         height: 36px;
     }
 
+    .flow-step-summary {
+        grid-template-columns: 1fr;
+        gap: 4px;
+    }
+
+    .flow-step-summary .operation-no {
+        width: fit-content;
+    }
+
     .flow-step-body {
-        padding: 0 12px 12px;
+        padding: 0 12px 12px 58px;
     }
 
     .operation-detail-grid {
