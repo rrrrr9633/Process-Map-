@@ -1892,6 +1892,7 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult, options 
     }
 
     html += renderResultModule('快速 AI 回复', renderGenerationAiResponse(caseData.generation_ai_response, { details: false }), { className: 'case-detail-module' });
+    html += renderResultModule('工序流程', renderReadableFlow(operations), { open: true, className: 'case-detail-module case-process-flow-module' });
 
     let annotationStatusHtml = `<div class="info"><strong>状态：</strong>${escapeHtml(status.status || 'not_started')} / ${escapeHtml(status.stage || 'not_started')}</div>`;
     annotationStatusHtml += `<div class="info"><strong>说明：</strong>${escapeHtml(status.message || '')}</div>`;
@@ -1907,43 +1908,15 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult, options 
     html += renderResultModule('案例精细标注状态', annotationStatusHtml, { open: canPoll || String(status.status || '').toLowerCase() === 'failed', className: 'case-detail-module' });
 
     if (explanations.length) {
-        html += renderResultModule('精细标注最终指导', renderFinalInstructionUnit(annotationResult.final_guidance, caseData.case_id, annotationResult.job_id), { open: true, className: 'case-detail-module' });
-        let annotationHtml = renderAnnotationGuidance(explanations);
-        if (annotationResult.export_csv_url) {
-            annotationHtml += `<p><a class="btn btn-sm" href="${API_BASE}/cases/${encodeURIComponent(caseData.case_id)}/annotations/assets/${encodeURIComponent(annotationResult.job_id)}/${annotationResult.export_csv_url}" target="_blank">下载可读标注 CSV</a></p>`;
-        }
-        explanations.slice(0, 6).forEach(explanation => {
-            let drawingHtml = `<p>${escapeHtml(explanation.visual_summary || '暂无图解摘要')}</p>`;
-            const pages = explanation.page_explanations || [];
-            pages.forEach(page => {
-                const bubble = page.bubble_asset || explanation.bubble_asset;
-                drawingHtml += `<div class="info"><strong>第 ${escapeHtml(page.page || 1)} 页：</strong>${escapeHtml(page.visual_summary || '')}</div>`;
-                if (bubble?.image_url) {
-                    drawingHtml += `<p><a class="btn btn-sm" href="${API_BASE}/cases/${encodeURIComponent(caseData.case_id)}/annotations/assets/${encodeURIComponent(annotationResult.job_id)}/${bubble.image_url}" target="_blank">打开气泡图</a></p>`;
-                }
-                const annotations = page.annotation_result?.annotations || [];
-                if (annotations.length) {
-                    const reviewCount = annotations.filter(annotation => {
-                        const status = annotation.review_status;
-                        return status === 'pending' || status === 'needs_manual_review' || Number(annotation.confidence || 0) < 0.85 || annotation.source === 'agent_reasoning';
-                    }).length;
-                    drawingHtml += `<div class="info">标注数量：${annotations.length}；需复核：${reviewCount}</div>`;
-                    drawingHtml += renderGuidanceList(
-                        '本页关键标注',
-                        annotations.slice(0, 5).map(annotation => readableAnnotationLine(annotation, explanation, page))
-                    );
-                }
-            });
-            annotationHtml += renderResultModule(
-                `${explanation.file_index} ${explanation.file_name}`,
-                drawingHtml,
-                { className: 'case-drawing-module' }
+        html += renderResultModule('精细标注', renderAnnotationEvidence(explanations, annotationResult, caseData.case_id), { open: true, className: 'case-detail-module' });
+        html += renderResultModule('气泡图', renderBubbleDiagramGallery(explanations, caseData.case_id, annotationResult.job_id), { open: true, className: 'case-detail-module bubble-gallery-module' });
+        if (annotationResult.process_drawing_plan) {
+            html += renderResultModule(
+                '细分工艺图草稿',
+                renderProcessDrawingPlan(annotationResult.process_drawing_plan, caseData.case_id, annotationResult.job_id),
+                { open: true, className: 'case-detail-module process-drawing-module' }
             );
-        });
-        if (explanations.length > 6) {
-            annotationHtml += `<div class="info">已隐藏 ${explanations.length - 6} 份图纸的页面预览；完整标注请下载 CSV 或逐项打开气泡图。</div>`;
         }
-        html += renderResultModule(`精细标注结果（${explanations.length} 份图纸）`, annotationHtml, { className: 'case-detail-module' });
     }
 
     if (options.annotationOverlay) {
@@ -1952,6 +1925,123 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult, options 
 
     container.innerHTML = `<div class="case-detail-refresh-shell ${options.annotationOverlay ? 'is-refreshing' : ''}">${html}</div>`;
     container.classList.add('active');
+}
+
+function renderAnnotationEvidence(explanations, annotationResult, caseId) {
+    let html = renderAnnotationGuidance(explanations);
+    if (annotationResult.export_csv_url) {
+        html += `<p><a class="btn btn-sm" href="${API_BASE}/cases/${encodeURIComponent(caseId)}/annotations/assets/${encodeURIComponent(annotationResult.job_id)}/${annotationResult.export_csv_url}" target="_blank">下载可读标注 CSV</a></p>`;
+    }
+    explanations.slice(0, 6).forEach(explanation => {
+        let drawingHtml = `<p>${escapeHtml(explanation.visual_summary || '暂无图解摘要')}</p>`;
+        const pages = explanation.page_explanations || [];
+        pages.forEach(page => {
+            const annotations = page.annotation_result?.annotations || [];
+            drawingHtml += `<div class="info"><strong>第 ${escapeHtml(page.page || 1)} 页：</strong>${escapeHtml(page.visual_summary || '')}</div>`;
+            if (annotations.length) {
+                const reviewCount = annotations.filter(annotation => {
+                    const status = annotation.review_status;
+                    return status === 'pending' || status === 'needs_manual_review' || Number(annotation.confidence || 0) < 0.85 || annotation.source === 'agent_reasoning';
+                }).length;
+                drawingHtml += `<div class="info">标注数量：${annotations.length}；需复核：${reviewCount}</div>`;
+                drawingHtml += renderGuidanceList(
+                    '本页关键标注',
+                    annotations.slice(0, 5).map(annotation => readableAnnotationLine(annotation, explanation, page))
+                );
+            }
+        });
+        html += renderResultModule(
+            `${explanation.file_index} ${explanation.file_name}`,
+            drawingHtml,
+            { className: 'case-drawing-module' }
+        );
+    });
+    if (explanations.length > 6) {
+        html += `<div class="info">已隐藏 ${explanations.length - 6} 份图纸的页面标注；完整标注请下载 CSV 查看。</div>`;
+    }
+    return html;
+}
+
+function renderBubbleDiagramGallery(explanations, caseId, jobId) {
+    const refs = [];
+    explanations.forEach(explanation => {
+        (explanation.page_explanations || []).forEach(page => {
+            const bubble = page.bubble_asset || explanation.bubble_asset;
+            if (!bubble?.image_url) return;
+            refs.push({
+                fileName: explanation.file_name,
+                page: page.page || 1,
+                summary: page.visual_summary || explanation.visual_summary || '',
+                imageUrl: bubble.image_url,
+            });
+        });
+    });
+    if (!refs.length) {
+        return '<div class="info">暂无气泡图。完成精细标注后会自动生成气泡图证据。</div>';
+    }
+    let html = '<div class="bubble-gallery-grid">';
+    refs.slice(0, 12).forEach(ref => {
+        const url = `${API_BASE}/cases/${encodeURIComponent(caseId)}/annotations/assets/${encodeURIComponent(jobId)}/${ref.imageUrl}`;
+        html += '<article class="bubble-gallery-card">';
+        html += `<a href="${url}" target="_blank"><img src="${url}" alt="${escapeHtml(ref.fileName)} 第${escapeHtml(ref.page)}页气泡图"></a>`;
+        html += `<strong>${escapeHtml(ref.fileName)} 第${escapeHtml(ref.page)}页</strong>`;
+        if (ref.summary) html += `<span>${escapeHtml(ref.summary)}</span>`;
+        html += `<div class="process-drawing-actions"><a class="btn btn-sm" href="${url}" target="_blank">打开气泡图</a><a class="btn btn-sm" href="${url}" target="_blank" download>下载 PNG</a></div>`;
+        html += '</article>';
+    });
+    html += '</div>';
+    if (refs.length > 12) {
+        html += `<div class="info">还有 ${refs.length - 12} 张气泡图未展开，可在各页标注结果中查看。</div>`;
+    }
+    return html;
+}
+
+function renderProcessDrawingPlan(plan, caseId, jobId) {
+    const sheets = plan?.sheets || [];
+    if (!sheets.length) {
+        return '<div class="info">暂无细分工艺图草稿。完成精细标注后会自动生成三张预览图。</div>';
+    }
+    let html = '<div class="process-drawing-summary">';
+    html += `<div class="info"><strong>${escapeHtml(plan.title || '细分工艺图草稿')}：</strong>${escapeHtml(plan.objective || '用于工艺人员复核的草稿图。')}</div>`;
+    if (plan.assumptions?.length) {
+        html += renderGuidanceList('生成假设', plan.assumptions.slice(0, 3));
+    }
+    if (plan.risks?.length) {
+        html += renderGuidanceList('复核风险', plan.risks.slice(0, 4));
+    }
+    html += '</div>';
+    html += '<div class="process-drawing-grid">';
+    sheets.forEach(sheet => {
+        const png = (sheet.assets || []).find(asset => asset.asset_type === 'png' && asset.file_url);
+        const svg = (sheet.assets || []).find(asset => asset.asset_type === 'svg' && asset.file_url);
+        const pngUrl = png ? `${API_BASE}/cases/${encodeURIComponent(caseId)}/annotations/assets/${encodeURIComponent(jobId)}/${png.file_url}` : '';
+        const svgUrl = svg ? `${API_BASE}/cases/${encodeURIComponent(caseId)}/annotations/assets/${encodeURIComponent(jobId)}/${svg.file_url}` : '';
+        html += '<article class="process-drawing-card">';
+        html += `<div class="process-drawing-card-head"><strong>${escapeHtml(sheet.sheet_no || '')} ${escapeHtml(sheet.title || '')}</strong><span>${escapeHtml(sheet.stage || 'draft')}</span></div>`;
+        if (pngUrl) {
+            html += `<a href="${pngUrl}" target="_blank" class="process-drawing-preview"><img src="${pngUrl}" alt="${escapeHtml(sheet.title || '工艺图草稿')}"></a>`;
+        } else {
+            html += '<div class="info">PNG 预览尚未生成</div>';
+        }
+        if (sheet.summary) {
+            html += `<p>${escapeHtml(sheet.summary)}</p>`;
+        }
+        if (sheet.related_operation_nos?.length) {
+            html += `<small>关联工序：${sheet.related_operation_nos.map(item => `OP${escapeHtml(item)}`).join('、')}</small>`;
+        }
+        html += '<div class="process-drawing-actions">';
+        if (pngUrl) html += `<a class="btn btn-sm" href="${pngUrl}" target="_blank" download>下载 PNG</a>`;
+        if (svgUrl) html += `<a class="btn btn-sm" href="${svgUrl}" target="_blank" download>下载 SVG</a>`;
+        html += '</div>';
+        html += '</article>';
+    });
+    html += '</div>';
+    const jsonAsset = (plan.assets || []).find(asset => asset.asset_type === 'json' && asset.file_url);
+    if (jsonAsset) {
+        const jsonUrl = `${API_BASE}/cases/${encodeURIComponent(caseId)}/annotations/assets/${encodeURIComponent(jobId)}/${jsonAsset.file_url}`;
+        html += `<p><a class="btn btn-sm" href="${jsonUrl}" target="_blank" download>下载工艺图计划 JSON</a></p>`;
+    }
+    return html;
 }
 
 function renderAnnotationProgressOverlay(status, startedAt, hasPreviousResult) {

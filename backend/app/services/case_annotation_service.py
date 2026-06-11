@@ -15,6 +15,8 @@ from app.services.case_service import BACKEND_DIR, case_service
 from app.services.drawing_explanation_service import drawing_explanation_service
 from app.services.export_service import ExportService
 from app.services.final_guidance_service import final_guidance_service
+from app.services.process_drawing_plan_service import process_drawing_plan_service
+from app.services.process_drawing_render_service import process_drawing_render_service
 
 
 UPLOADS_DIR = BACKEND_DIR / "uploads"
@@ -219,12 +221,28 @@ class CaseAnnotationService:
                 explanations=explanations,
                 export_csv_url=record.export_csv_url,
             )
+            process_drawing_plan = process_drawing_plan_service.build(
+                case=case,
+                job_id=record.job_id,
+                explanations=explanations,
+                final_guidance=final_guidance,
+            )
+            try:
+                process_drawing_plan = process_drawing_render_service.render(
+                    process_drawing_plan,
+                    self.process_drawings_dir(record.case_id, record.job_id),
+                )
+            except Exception as render_exc:
+                process_drawing_plan.risks.append(
+                    f"细分工艺图草稿渲染失败：{type(render_exc).__name__}: {render_exc}"
+                )
             return {
                 "case_id": record.case_id,
                 "job_id": record.job_id,
                 "explanations": [item.model_dump(mode="json") for item in explanations],
                 "export_csv_url": record.export_csv_url,
                 "final_guidance": final_guidance,
+                "process_drawing_plan": process_drawing_plan.model_dump(mode="json"),
                 "updated_at": record.updated_at.isoformat(),
             }
 
@@ -349,6 +367,11 @@ class CaseAnnotationService:
 
     def exports_dir(self, case_id: str, job_id: str) -> Path:
         path = self.base_dir(case_id, job_id) / "exports"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def process_drawings_dir(self, case_id: str, job_id: str) -> Path:
+        path = self.base_dir(case_id, job_id) / "process_drawings"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
