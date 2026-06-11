@@ -1163,6 +1163,27 @@ input[type="file"]:focus {
     margin-bottom: 0;
 }
 
+.case-action-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.case-detail-module {
+    margin-bottom: 12px;
+}
+
+.case-detail-module .result-module-body > .guidance-panel,
+.case-detail-module .result-module-body > .final-guidance-panel {
+    margin-bottom: 0;
+}
+
+.case-drawing-module {
+    margin: 10px 0;
+    background: var(--white);
+}
+
 .case-header {
     display: flex;
     align-items: center;

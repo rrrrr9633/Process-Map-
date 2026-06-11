@@ -1834,98 +1834,92 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult) {
     const explanations = annotationResult?.explanations || [];
     const canPoll = ['pending', 'running'].includes(String(status.status || '').toLowerCase());
 
-    let html = '<div class="result-section">';
-    html += `<h3>案例详情：${escapeHtml(caseData.case_name)}</h3>`;
-    html += `<div class="part-info-grid">`;
-    html += `<p><strong>案例ID：</strong>${escapeHtml(caseData.case_id)}</p>`;
-    html += `<p><strong>状态：</strong>${escapeHtml(caseStatusLabel(caseData.status))}</p>`;
-    html += `<p><strong>质量：</strong>${escapeHtml(caseQualityLabel(caseData.quality))}</p>`;
-    if (caseData.reviewer) html += `<p><strong>审核人：</strong>${escapeHtml(caseData.reviewer)}</p>`;
-    html += `<p><strong>工序数：</strong>${operations.length}</p>`;
-    html += `<p><strong>绑定图纸：</strong>${sourceFiles.length ? sourceFiles.map(item => escapeHtml(item.original_name || item.stored_name)).join('、') : '未绑定'}</p>`;
-    html += '</div>';
-    html += '<div class="case-maintenance">';
-    html += '<div class="form-row">';
-    html += '<div class="form-col">';
-    html += '<label>案例状态</label>';
-    html += `<select id="case-detail-status">${renderCaseSelectOptions([
+    let overviewHtml = `<h3>案例详情：${escapeHtml(caseData.case_name)}</h3>`;
+    overviewHtml += `<div class="part-info-grid">`;
+    overviewHtml += `<p><strong>案例ID：</strong>${escapeHtml(caseData.case_id)}</p>`;
+    overviewHtml += `<p><strong>状态：</strong>${escapeHtml(caseStatusLabel(caseData.status))}</p>`;
+    overviewHtml += `<p><strong>质量：</strong>${escapeHtml(caseQualityLabel(caseData.quality))}</p>`;
+    if (caseData.reviewer) overviewHtml += `<p><strong>审核人：</strong>${escapeHtml(caseData.reviewer)}</p>`;
+    overviewHtml += `<p><strong>工序数：</strong>${operations.length}</p>`;
+    overviewHtml += `<p><strong>绑定图纸：</strong>${sourceFiles.length ? sourceFiles.map(item => escapeHtml(item.original_name || item.stored_name)).join('、') : '未绑定'}</p>`;
+    overviewHtml += '</div>';
+    overviewHtml += '<div class="case-maintenance">';
+    overviewHtml += '<div class="form-row">';
+    overviewHtml += '<div class="form-col">';
+    overviewHtml += '<label>案例状态</label>';
+    overviewHtml += `<select id="case-detail-status">${renderCaseSelectOptions([
         { value: 'draft', label: '草稿' },
         { value: 'reviewed', label: '已审核' },
         { value: 'approved', label: '已批准' },
         { value: 'archived', label: '已归档' },
     ], caseData.status || 'draft')}</select>`;
-    html += '</div>';
-    html += '<div class="form-col">';
-    html += '<label>质量评级</label>';
-    html += `<select id="case-detail-quality">${renderCaseSelectOptions([
+    overviewHtml += '</div>';
+    overviewHtml += '<div class="form-col">';
+    overviewHtml += '<label>质量评级</label>';
+    overviewHtml += `<select id="case-detail-quality">${renderCaseSelectOptions([
         { value: '', label: '未评级' },
         { value: 'excellent', label: '优秀' },
         { value: 'good', label: '良好' },
         { value: 'normal', label: '一般' },
         { value: 'poor', label: '较差' },
     ], caseData.quality || '')}</select>`;
-    html += '</div>';
-    html += '<div class="form-col">';
-    html += '<label>审核人</label>';
-    html += `<input id="case-detail-reviewer" type="text" value="${escapeHtml(caseData.reviewer || '')}" placeholder="可选">`;
-    html += '</div>';
-    html += '</div>';
-    html += '<label>审核备注</label>';
-    html += `<textarea id="case-detail-comments" rows="3" placeholder="记录批准、退回或质量评级依据">${escapeHtml(caseData.review_comments || '')}</textarea>`;
-    html += `<button class="btn btn-primary" type="button" onclick="saveCaseReview('${escapeHtml(caseData.case_id)}')">保存状态和质量</button>`;
-    html += '</div>';
-    html += '<div style="margin-top:10px;">';
-    html += `<button class="btn btn-primary" onclick="loadCaseForEdit('${escapeHtml(caseData.case_id)}')">编辑工序</button>`;
-    html += `<button class="btn btn-secondary" onclick="loadCaseToAnalysis('${escapeHtml(caseData.case_id)}')">重新生成工序</button>`;
-    html += `<button class="btn btn-secondary" onclick="startCaseAnnotation('${escapeHtml(caseData.case_id)}')">${status.status === 'failed' ? '重试精细标注' : '启动/刷新精细标注'}</button>`;
-    html += '</div>';
-    html += '</div>';
+    overviewHtml += '</div>';
+    overviewHtml += '<div class="form-col">';
+    overviewHtml += '<label>审核人</label>';
+    overviewHtml += `<input id="case-detail-reviewer" type="text" value="${escapeHtml(caseData.reviewer || '')}" placeholder="可选">`;
+    overviewHtml += '</div>';
+    overviewHtml += '</div>';
+    overviewHtml += '<label>审核备注</label>';
+    overviewHtml += `<textarea id="case-detail-comments" rows="3" placeholder="记录批准、退回或质量评级依据">${escapeHtml(caseData.review_comments || '')}</textarea>`;
+    overviewHtml += `<button class="btn btn-primary" type="button" onclick="saveCaseReview('${escapeHtml(caseData.case_id)}')">保存状态和质量</button>`;
+    overviewHtml += '</div>';
+    overviewHtml += '<div class="case-action-row">';
+    overviewHtml += `<button class="btn btn-primary" onclick="loadCaseForEdit('${escapeHtml(caseData.case_id)}')">编辑工序</button>`;
+    overviewHtml += `<button class="btn btn-secondary" onclick="loadCaseToAnalysis('${escapeHtml(caseData.case_id)}')">重新生成工序</button>`;
+    overviewHtml += `<button class="btn btn-secondary" onclick="startCaseAnnotation('${escapeHtml(caseData.case_id)}')">${status.status === 'failed' ? '重试精细标注' : '启动/刷新精细标注'}</button>`;
+    overviewHtml += '</div>';
 
-    html += renderProcessGuidance(caseData.generation_ai_response?.process_guidance, {
+    let html = renderResultModule('案例信息与操作', overviewHtml, { open: true, className: 'case-detail-module' });
+
+    const guidanceHtml = renderProcessGuidance(caseData.generation_ai_response?.process_guidance, {
         data: {
             process_plan: caseData.process_plan,
             parse_result: caseData.drawing_parse_result || {},
         },
     });
+    if (guidanceHtml) {
+        html += renderResultModule('最终文字指导', guidanceHtml, { open: true, className: 'case-detail-module' });
+    }
 
-    html += '<div class="result-section">';
-    html += '<h3>快速 AI 回复</h3>';
-    html += renderGenerationAiResponse(caseData.generation_ai_response, { details: true });
-    html += '</div>';
+    html += renderResultModule('快速 AI 回复', renderGenerationAiResponse(caseData.generation_ai_response, { details: false }), { className: 'case-detail-module' });
 
-    html += '<div class="result-section">';
-    html += '<h3>案例精细标注</h3>';
-    html += `<div class="info"><strong>状态：</strong>${escapeHtml(status.status || 'not_started')} / ${escapeHtml(status.stage || 'not_started')}</div>`;
-    html += `<div class="info"><strong>说明：</strong>${escapeHtml(status.message || '')}</div>`;
+    let annotationStatusHtml = `<div class="info"><strong>状态：</strong>${escapeHtml(status.status || 'not_started')} / ${escapeHtml(status.stage || 'not_started')}</div>`;
+    annotationStatusHtml += `<div class="info"><strong>说明：</strong>${escapeHtml(status.message || '')}</div>`;
     if (status.ai_stream_preview) {
-        html += `<div class="info"><strong>AI 状态：</strong>${escapeHtml(String(status.ai_stream_preview).slice(-180))}</div>`;
+        annotationStatusHtml += `<div class="info"><strong>AI 状态：</strong>${escapeHtml(String(status.ai_stream_preview).slice(-180))}</div>`;
     }
     if (status.error_message) {
-        html += `<div class="critical"><strong>${escapeHtml(status.error_type || 'Error')}：</strong>${escapeHtml(status.error_message)}</div>`;
+        annotationStatusHtml += `<div class="critical"><strong>${escapeHtml(status.error_type || 'Error')}：</strong>${escapeHtml(status.error_message)}</div>`;
     }
     if (canPoll) {
-        html += '<div class="warning">精细标注在案例后台运行。你可以关闭页面，之后回到案例详情继续查看。</div>';
+        annotationStatusHtml += '<div class="warning">精细标注在案例后台运行。你可以关闭页面，之后回到案例详情继续查看。</div>';
     }
-    html += '</div>';
+    html += renderResultModule('案例精细标注状态', annotationStatusHtml, { open: canPoll, className: 'case-detail-module' });
 
     if (explanations.length) {
-        html += renderFinalInstructionUnit(annotationResult.final_guidance, caseData.case_id, annotationResult.job_id);
-        html += '<div class="result-section">';
-        html += `<h3>精细标注结果（${explanations.length} 份图纸）</h3>`;
-        html += renderAnnotationGuidance(explanations);
+        html += renderResultModule('精细标注最终指导', renderFinalInstructionUnit(annotationResult.final_guidance, caseData.case_id, annotationResult.job_id), { open: true, className: 'case-detail-module' });
+        let annotationHtml = renderAnnotationGuidance(explanations);
         if (annotationResult.export_csv_url) {
-            html += `<p><a class="btn btn-sm" href="${API_BASE}/cases/${encodeURIComponent(caseData.case_id)}/annotations/assets/${encodeURIComponent(annotationResult.job_id)}/${annotationResult.export_csv_url}" target="_blank">下载可读标注 CSV</a></p>`;
+            annotationHtml += `<p><a class="btn btn-sm" href="${API_BASE}/cases/${encodeURIComponent(caseData.case_id)}/annotations/assets/${encodeURIComponent(annotationResult.job_id)}/${annotationResult.export_csv_url}" target="_blank">下载可读标注 CSV</a></p>`;
         }
         explanations.slice(0, 6).forEach(explanation => {
-            html += `<div class="operation-card">`;
-            html += `<div class="operation-header"><span class="operation-no">${escapeHtml(explanation.file_index)}</span><span class="operation-name">${escapeHtml(explanation.file_name)}</span></div>`;
-            html += `<p>${escapeHtml(explanation.visual_summary || '暂无图解摘要')}</p>`;
+            let drawingHtml = `<p>${escapeHtml(explanation.visual_summary || '暂无图解摘要')}</p>`;
             const pages = explanation.page_explanations || [];
             pages.forEach(page => {
                 const bubble = page.bubble_asset || explanation.bubble_asset;
-                html += `<div class="info"><strong>第 ${escapeHtml(page.page || 1)} 页：</strong>${escapeHtml(page.visual_summary || '')}</div>`;
+                drawingHtml += `<div class="info"><strong>第 ${escapeHtml(page.page || 1)} 页：</strong>${escapeHtml(page.visual_summary || '')}</div>`;
                 if (bubble?.image_url) {
-                    html += `<p><a class="btn btn-sm" href="${API_BASE}/cases/${encodeURIComponent(caseData.case_id)}/annotations/assets/${encodeURIComponent(annotationResult.job_id)}/${bubble.image_url}" target="_blank">打开气泡图</a></p>`;
+                    drawingHtml += `<p><a class="btn btn-sm" href="${API_BASE}/cases/${encodeURIComponent(caseData.case_id)}/annotations/assets/${encodeURIComponent(annotationResult.job_id)}/${bubble.image_url}" target="_blank">打开气泡图</a></p>`;
                 }
                 const annotations = page.annotation_result?.annotations || [];
                 if (annotations.length) {
@@ -1933,19 +1927,23 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult) {
                         const status = annotation.review_status;
                         return status === 'pending' || status === 'needs_manual_review' || Number(annotation.confidence || 0) < 0.85 || annotation.source === 'agent_reasoning';
                     }).length;
-                    html += `<div class="info">标注数量：${annotations.length}；需复核：${reviewCount}</div>`;
-                    html += renderGuidanceList(
+                    drawingHtml += `<div class="info">标注数量：${annotations.length}；需复核：${reviewCount}</div>`;
+                    drawingHtml += renderGuidanceList(
                         '本页关键标注',
                         annotations.slice(0, 5).map(annotation => readableAnnotationLine(annotation, explanation, page))
                     );
                 }
             });
-            html += '</div>';
+            annotationHtml += renderResultModule(
+                `${explanation.file_index} ${explanation.file_name}`,
+                drawingHtml,
+                { className: 'case-drawing-module' }
+            );
         });
         if (explanations.length > 6) {
-            html += `<div class="info">已隐藏 ${explanations.length - 6} 份图纸的页面预览；完整标注请下载 CSV 或逐项打开气泡图。</div>`;
+            annotationHtml += `<div class="info">已隐藏 ${explanations.length - 6} 份图纸的页面预览；完整标注请下载 CSV 或逐项打开气泡图。</div>`;
         }
-        html += '</div>';
+        html += renderResultModule(`精细标注结果（${explanations.length} 份图纸）`, annotationHtml, { className: 'case-detail-module' });
     }
 
     container.innerHTML = html;
@@ -2020,10 +2018,29 @@ async function loadCaseToAnalysis(caseId) {
             return;
         }
         currentCaseId = payload.case_id;
+        const caseResponse = await fetch(`${API_BASE}/cases/${encodeURIComponent(caseId)}`);
+        if (!caseResponse.ok) throw new Error(`HTTP ${caseResponse.status}`);
+        const caseData = await caseResponse.json();
+        currentData = {
+            loaded_case_name: caseData.case_name,
+            parse_result: caseData.drawing_parse_result || {},
+            process_plan: caseData.process_plan || { title: caseData.case_name || '案例工序方案', operations: [] },
+            flow: {
+                title: caseData.process_plan?.title || `案例流程：${caseData.case_name}`,
+                mermaid: '',
+            },
+            similar_cases: [],
+            ai_suggestions: caseData.generation_ai_response?.ai_suggestions || [],
+            agent_trace: caseData.generation_ai_response?.agent_trace || null,
+            process_guidance: caseData.generation_ai_response?.process_guidance || null,
+            generation_ai_response: caseData.generation_ai_response || null,
+            source_files: sourceFiles,
+        };
         document.getElementById('input-method').value = 'file';
         toggleInputMethod();
         updateBoundCaseFilesHint();
         switchTab('generate', document.querySelector('.tab[data-tab="generate"]'));
+        displayResult(currentData);
     } catch (error) {
         alert('加载到分析台失败：' + error.message);
     }

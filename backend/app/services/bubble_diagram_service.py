@@ -40,6 +40,7 @@ class BubbleDiagramService:
         try:
             base = Image.open(explanation.page_asset.image_path).convert("RGB")
             canvas = self._build_canvas(base, explanation.annotation_result.annotations)
+            font_message = f"；字体：{canvas.info.get('bubble_font', 'unknown')}"
             canvas.save(output_path)
             explanation.annotation_result.bubble_diagram_available = True
             explanation.bubble_asset = BubbleDiagramAsset(
@@ -49,7 +50,7 @@ class BubbleDiagramService:
                 image_path=str(output_path),
                 image_url=f"bubbles/{output_path.name}",
                 status="generated",
-                message="气泡图已生成",
+                message=f"气泡图已生成{font_message}",
             )
         except Exception as exc:
             explanation.bubble_asset = BubbleDiagramAsset(
@@ -84,6 +85,7 @@ class BubbleDiagramService:
         try:
             base = Image.open(page_explanation.page_asset.image_path).convert("RGB")
             canvas = self._build_canvas(base, page_explanation.annotation_result.annotations)
+            font_message = f"；字体：{canvas.info.get('bubble_font', 'unknown')}"
             canvas.save(output_path)
             page_explanation.annotation_result.bubble_diagram_available = True
             page_explanation.bubble_asset = BubbleDiagramAsset(
@@ -93,7 +95,7 @@ class BubbleDiagramService:
                 image_path=str(output_path),
                 image_url=f"bubbles/{output_path.name}",
                 status="generated",
-                message="气泡图已生成",
+                message=f"气泡图已生成{font_message}",
             )
         except Exception as exc:
             page_explanation.bubble_asset = BubbleDiagramAsset(
@@ -116,6 +118,7 @@ class BubbleDiagramService:
         font = self._load_font(18)
         small = self._load_font(15)
         strong = self._load_font(20)
+        canvas.info["bubble_font"] = self._font_name(font)
 
         draw.line((base.width, 0, base.width, canvas.height), fill=(20, 20, 20), width=2)
         draw.text((base.width + padding, padding), "气泡标注清单", fill=(0, 0, 0), font=strong)
@@ -156,9 +159,19 @@ class BubbleDiagramService:
             "/System/Library/Fonts/Hiragino Sans GB.ttc",
             "/System/Library/Fonts/STHeiti Medium.ttc",
             "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.otf",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.otf",
+            "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            "/usr/share/fonts/truetype/arphic/uming.ttc",
+            "/usr/share/fonts/truetype/arphic/ukai.ttc",
+            "C:/Windows/Fonts/msyh.ttc",
+            "C:/Windows/Fonts/simfang.ttf",
+            "C:/Windows/Fonts/simsun.ttc",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         ]
         for candidate in candidates:
             path = Path(candidate)
@@ -167,7 +180,19 @@ class BubbleDiagramService:
                     return ImageFont.truetype(str(path), size=size)
                 except Exception:
                     continue
-        return ImageFont.load_default()
+        try:
+            return ImageFont.load_default(size=size)
+        except TypeError:
+            return ImageFont.load_default()
+
+    def _font_name(self, font) -> str:
+        path = getattr(font, "path", "")
+        if path:
+            return str(path)
+        try:
+            return font.getname()[0]
+        except Exception:
+            return "PIL default"
 
     def _safe_text(self, value: str) -> str:
         return normalize_engineering_text(value)
