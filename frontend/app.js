@@ -1910,13 +1910,11 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult, options 
     if (explanations.length) {
         html += renderResultModule('精细标注', renderAnnotationEvidence(explanations, annotationResult, caseData.case_id), { open: true, className: 'case-detail-module' });
         html += renderResultModule('气泡图', renderBubbleDiagramGallery(explanations, caseData.case_id, annotationResult.job_id), { open: true, className: 'case-detail-module bubble-gallery-module' });
-        if (annotationResult.process_drawing_plan) {
-            html += renderResultModule(
-                '细分工艺图草稿',
-                renderProcessDrawingPlan(annotationResult.process_drawing_plan, caseData.case_id, annotationResult.job_id),
-                { open: true, className: 'case-detail-module process-drawing-module' }
-            );
-        }
+        html += renderResultModule(
+            '细分工艺图草稿',
+            renderProcessDrawingPlan(annotationResult.process_drawing_plan, caseData.case_id, annotationResult.job_id),
+            { open: true, className: 'case-detail-module process-drawing-module' }
+        );
     }
 
     if (options.annotationOverlay) {
@@ -1999,7 +1997,7 @@ function renderBubbleDiagramGallery(explanations, caseId, jobId) {
 function renderProcessDrawingPlan(plan, caseId, jobId) {
     const sheets = plan?.sheets || [];
     if (!sheets.length) {
-        return '<div class="info">暂无细分工艺图草稿。完成精细标注后会自动生成三张预览图。</div>';
+        return '<div class="warning">当前结果里还没有 process_drawing_plan。通常是云端后端还没更新到包含工艺图草稿的版本，或这个案例是旧的精细标注结果。请先发布后端代码并重新刷新精细标注；成功后这里会显示 S01/S02/S03 三张工艺图草稿。</div>';
     }
     let html = '<div class="process-drawing-summary">';
     html += `<div class="info"><strong>${escapeHtml(plan.title || '细分工艺图草稿')}：</strong>${escapeHtml(plan.objective || '用于工艺人员复核的草稿图。')}</div>`;
