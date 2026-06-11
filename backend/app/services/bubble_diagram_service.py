@@ -108,83 +108,34 @@ class BubbleDiagramService:
         return page_explanation
 
     def _build_canvas(self, base: Image.Image, annotations: list[DrawingAnnotation]) -> Image.Image:
-        list_width = 520
-        padding = 22
-        row_height = 92
-        canvas_height = max(base.height, padding * 2 + 54 + max(1, len(annotations)) * row_height)
-        canvas = Image.new("RGBA", (base.width + list_width, canvas_height), (248, 250, 252, 255))
-        canvas.paste(base.convert("RGBA"), (0, 0))
+        canvas = base.convert("RGBA")
         draw = ImageDraw.Draw(canvas)
-        font = self._load_font(18)
-        small = self._load_font(15)
-        strong = self._load_font(20)
+        font = self._load_font(14)
         canvas.info["bubble_font"] = self._font_name(font)
 
-        draw.rounded_rectangle(
-            (base.width + 12, 14, canvas.width - 14, canvas.height - 14),
-            radius=10,
-            fill=(255, 255, 255, 255),
-            outline=(220, 226, 233, 255),
-            width=1,
-        )
-        draw.text((base.width + padding, padding), "图纸标注审阅", fill=(25, 31, 39, 255), font=strong)
-        draw.text(
-            (base.width + padding, padding + 28),
-            f"{len(annotations)} 条结构化标注",
-            fill=(100, 116, 139, 255),
-            font=small,
-        )
+        drawable_annotations = [annotation for annotation in annotations if self._has_valid_region(annotation)]
+        if not drawable_annotations:
+            result = canvas.convert("RGB")
+            result.info["bubble_font"] = canvas.info.get("bubble_font", "unknown")
+            return result
 
-        if not annotations:
-            draw.text((base.width + padding, padding + 62), "未识别到可绘制标注", fill=(100, 116, 139, 255), font=font)
-            return canvas.convert("RGB")
-
-        for index, annotation in enumerate(annotations, start=1):
+        occupied_boxes: list[tuple[int, int, int, int]] = []
+        for index, annotation in enumerate(drawable_annotations, start=1):
             label = annotation.label or annotation.annotation_id or f"A{index:03d}"
-            color = self._color(index)
-            if self._has_valid_region(annotation):
-                x1, y1, x2, y2 = self._region_to_pixels(annotation, base.width, base.height)
-                self._draw_annotation_callout(
-                    draw,
-                    annotation,
-                    label,
-                    (x1, y1, x2, y2),
-                    base.width,
-                    color,
-                    font,
-                    small,
-                )
+            color = self._semantic_color(annotation.semantic_type, index)
+            region = self._region_to_pixels(annotation, base.width, base.height)
+            self._draw_annotation_callout(
+                draw,
+                annotation,
+                label,
+                region,
+                base.width,
+                base.height,
+                color,
+                font,
+                occupied_boxes,
+            )
 
-            row_y = padding + 62 + (index - 1) * row_height
-            if row_y > canvas.height - 70:
-                continue
-            text = self._safe_text(annotation.parameter_name or annotation.normalized_text or annotation.raw_text or label)
-            value = self._safe_text(annotation.parameter_value or annotation.normalized_text or annotation.raw_text or "待确认")
-            status = self._status_label(annotation.review_status)
-            summary = self._annotation_summary(annotation)
-            card_x1 = base.width + padding
-            card_y1 = row_y
-            card_x2 = canvas.width - padding
-            card_y2 = min(canvas.height - 24, row_y + row_height - 10)
-            draw.rounded_rectangle(
-                (card_x1, card_y1, card_x2, card_y2),
-                radius=8,
-                fill=(248, 250, 252, 255),
-                outline=(226, 232, 240, 255),
-                width=1,
-            )
-            draw.rounded_rectangle(
-                (card_x1 + 12, card_y1 + 14, card_x1 + 58, card_y1 + 38),
-                radius=6,
-                fill=color + (24,),
-                outline=color + (190,),
-                width=1,
-            )
-            draw.text((card_x1 + 20, card_y1 + 18), self._short_label(label, index), fill=color + (255,), font=small)
-            draw.text((card_x1 + 68, card_y1 + 12), self._fit_text(text, 32), fill=(15, 23, 42, 255), font=strong)
-            draw.text((card_x1 + 68, card_y1 + 38), f"值：{self._fit_text(value, 24)}  状态：{status}", fill=(71, 85, 105, 255), font=font)
-            for line_index, line in enumerate(self._wrap_text(summary, 38)[:2]):
-                draw.text((card_x1 + 68, card_y1 + 63 + line_index * 18), line, fill=(100, 116, 139, 255), font=small)
         result = canvas.convert("RGB")
         result.info["bubble_font"] = canvas.info.get("bubble_font", "unknown")
         return result
@@ -196,36 +147,141 @@ class BubbleDiagramService:
         label: str,
         region: tuple[int, int, int, int],
         page_width: int,
+        page_height: int,
         color: tuple[int, int, int],
         font,
-        small,
+        occupied_boxes: list[tuple[int, int, int, int]],
     ) -> None:
         x1, y1, x2, y2 = region
-        rgba = color + (255,)
-        fill = color + (28,)
-        outline = color + (185,)
-        draw.rounded_rectangle((x1, y1, x2, y2), radius=4, fill=fill, outline=outline, width=2)
-
-        value = self._safe_text(annotation.parameter_value or annotation.normalized_text or annotation.raw_text or label)
-        title = self._fit_text(f"{self._short_label(label, 0)}  {value}", 18)
-        text_box = draw.textbbox((0, 0), title, font=small)
-        tag_width = min(max(text_box[2] - text_box[0] + 22, 82), 260)
-        tag_height = 30
-        tag_x = x2 + 12 if x2 + tag_width + 18 < page_width else max(8, x1 - tag_width - 12)
-        tag_y = max(8, min(y1 - 6, y2 - tag_height + 6))
-        anchor_x = x2 if tag_x > x2 else x1
-        anchor_y = max(y1, min(y2, tag_y + tag_height // 2))
-
-        draw.line((anchor_x, anchor_y, tag_x if tag_x > x2 else tag_x + tag_width, tag_y + tag_height // 2), fill=rgba, width=2)
-        draw.rounded_rectangle(
-            (tag_x, tag_y, tag_x + tag_width, tag_y + tag_height),
-            radius=8,
-            fill=(255, 255, 255, 238),
-            outline=outline,
+        rgba = color + (235,)
+        anchor_x = (x1 + x2) // 2
+        anchor_y = (y1 + y2) // 2
+        target_radius = 3
+        draw.ellipse(
+            (anchor_x - target_radius, anchor_y - target_radius, anchor_x + target_radius, anchor_y + target_radius),
+            fill=(255, 255, 255, 245),
+            outline=rgba,
             width=1,
         )
-        draw.rounded_rectangle((tag_x, tag_y, tag_x + 8, tag_y + tag_height), radius=4, fill=rgba)
-        draw.text((tag_x + 14, tag_y + 7), title, fill=(15, 23, 42, 255), font=small)
+
+        title = self._bubble_title(annotation, label)
+        text_box = draw.textbbox((0, 0), title, font=font)
+        text_width = text_box[2] - text_box[0]
+        text_height = text_box[3] - text_box[1]
+        padding_x = 8
+        padding_y = 5
+        tag_width = min(max(text_width + padding_x * 2, 58), min(210, max(80, page_width // 3)))
+        tag_height = text_height + padding_y * 2
+        gap = 18
+
+        candidates = self._label_candidates(anchor_x, anchor_y, tag_width, tag_height, page_width, page_height, gap)
+        tag_x, tag_y = self._choose_label_position(candidates, tag_width, tag_height, occupied_boxes, page_width, page_height)
+        tag_box = (tag_x, tag_y, tag_x + tag_width, tag_y + tag_height)
+        occupied_boxes.append(tag_box)
+
+        connector_x = tag_x if tag_x > anchor_x else tag_x + tag_width
+        connector_y = tag_y + tag_height // 2
+        draw.line((anchor_x, anchor_y, connector_x, connector_y), fill=rgba, width=1)
+        draw.rounded_rectangle(
+            tag_box,
+            radius=4,
+            fill=(255, 255, 255, 242),
+            outline=color + (210,),
+            width=1,
+        )
+        draw.line((tag_x + 5, tag_y + tag_height - 1, tag_x + tag_width - 5, tag_y + tag_height - 1), fill=color + (105,), width=1)
+        draw.text((tag_x + padding_x, tag_y + padding_y - 1), self._fit_text(title, 18), fill=(31, 41, 55, 255), font=font)
+
+    def _bubble_title(self, annotation: DrawingAnnotation, label: str) -> str:
+        short_label = self._short_label(label, 0)
+        value = self._safe_text(annotation.parameter_value or annotation.normalized_text or annotation.raw_text or "")
+        if value and value != short_label:
+            return f"{short_label} {self._fit_text(value, 12)}"
+        return short_label
+
+    def _label_candidates(
+        self,
+        anchor_x: int,
+        anchor_y: int,
+        tag_width: int,
+        tag_height: int,
+        page_width: int,
+        page_height: int,
+        gap: int,
+    ) -> list[tuple[int, int]]:
+        positions = [
+            (anchor_x + gap, anchor_y - tag_height - 6),
+            (anchor_x + gap, anchor_y + 6),
+            (anchor_x - tag_width - gap, anchor_y - tag_height - 6),
+            (anchor_x - tag_width - gap, anchor_y + 6),
+            (anchor_x - tag_width // 2, anchor_y - tag_height - gap),
+            (anchor_x - tag_width // 2, anchor_y + gap),
+        ]
+        clamped: list[tuple[int, int]] = []
+        margin = 6
+        for x, y in positions:
+            clamped.append(
+                (
+                    max(margin, min(page_width - tag_width - margin, x)),
+                    max(margin, min(page_height - tag_height - margin, y)),
+                )
+            )
+        return clamped
+
+    def _choose_label_position(
+        self,
+        candidates: list[tuple[int, int]],
+        tag_width: int,
+        tag_height: int,
+        occupied_boxes: list[tuple[int, int, int, int]],
+        page_width: int,
+        page_height: int,
+    ) -> tuple[int, int]:
+        if not candidates:
+            return 6, 6
+
+        best = candidates[0]
+        best_score = -1
+        for x, y in candidates:
+            score = 100
+            probe = (x, y, x + tag_width, y + tag_height)
+            for occupied in occupied_boxes:
+                if self._boxes_overlap(probe, occupied, padding=5):
+                    score -= 45
+            if x <= 8 or y <= 8 or x + tag_width >= page_width - 8 or y + tag_height >= page_height - 8:
+                score -= 10
+            if score > best_score:
+                best = (x, y)
+                best_score = score
+        return best
+
+    def _boxes_overlap(
+        self,
+        first: tuple[int, int, int, int],
+        second: tuple[int, int, int, int],
+        padding: int = 0,
+    ) -> bool:
+        return not (
+            first[2] + padding < second[0]
+            or first[0] - padding > second[2]
+            or first[3] + padding < second[1]
+            or first[1] - padding > second[3]
+        )
+
+    def _semantic_color(self, semantic_type: str, index: int) -> tuple[int, int, int]:
+        colors = {
+            "dimension": (55, 65, 81),
+            "tolerance": (37, 99, 235),
+            "roughness": (5, 150, 105),
+            "datum": (124, 58, 237),
+            "geometric_tolerance": (2, 132, 199),
+            "material": (146, 64, 14),
+            "process_note": (190, 18, 60),
+            "inspection_note": (14, 116, 144),
+            "quality_note": (180, 83, 9),
+            "unknown": self._color(index),
+        }
+        return colors.get(semantic_type, self._color(index))
 
     def _load_font(self, size: int):
         candidates = [
