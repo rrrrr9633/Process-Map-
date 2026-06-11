@@ -1221,6 +1221,54 @@ input[type="file"]:focus {
     word-break: break-word;
 }
 
+.case-detail-refresh-shell {
+    position: relative;
+    min-height: 240px;
+}
+
+.case-detail-refresh-shell.is-refreshing {
+    pointer-events: none;
+}
+
+.case-annotation-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    display: grid;
+    place-items: start center;
+    padding: 28px;
+    background: rgba(246, 246, 243, 0.82);
+    backdrop-filter: blur(3px);
+    border: 1px solid var(--border-strong);
+}
+
+.case-annotation-progress-card {
+    width: min(720px, 100%);
+    background: var(--white);
+    border: 1px solid var(--border-strong);
+    box-shadow: var(--shadow);
+    padding: 22px;
+}
+
+.case-annotation-progress-bar {
+    height: 8px;
+    margin: 16px 0;
+    background: var(--surface-muted);
+    border: 1px solid var(--border-strong);
+    overflow: hidden;
+}
+
+.case-annotation-progress-bar span {
+    display: block;
+    height: 100%;
+    background: var(--black);
+    transition: width 0.2s ease;
+}
+
+.case-annotation-progress-meta {
+    margin-bottom: 14px;
+}
+
 p[style],
 span[style] {
     color: inherit !important;

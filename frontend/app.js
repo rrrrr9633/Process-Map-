@@ -1816,7 +1816,7 @@ async function loadCase(caseId) {
     }
 }
 
-function renderCaseDetail(caseData, annotationStatus, annotationResult) {
+function renderCaseDetail(caseData, annotationStatus, annotationResult, options = {}) {
     const detailId = `case-detail-${caseData.case_id}`;
     const container = document.getElementById(detailId) || document.getElementById('case-detail');
     if (!container) return;
@@ -1904,7 +1904,7 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult) {
     if (canPoll) {
         annotationStatusHtml += '<div class="warning">精细标注在案例后台运行。你可以关闭页面，之后回到案例详情继续查看。</div>';
     }
-    html += renderResultModule('案例精细标注状态', annotationStatusHtml, { open: canPoll, className: 'case-detail-module' });
+    html += renderResultModule('案例精细标注状态', annotationStatusHtml, { open: canPoll || String(status.status || '').toLowerCase() === 'failed', className: 'case-detail-module' });
 
     if (explanations.length) {
         html += renderResultModule('精细标注最终指导', renderFinalInstructionUnit(annotationResult.final_guidance, caseData.case_id, annotationResult.job_id), { open: true, className: 'case-detail-module' });
@@ -1946,11 +1946,60 @@ function renderCaseDetail(caseData, annotationStatus, annotationResult) {
         html += renderResultModule(`精细标注结果（${explanations.length} 份图纸）`, annotationHtml, { className: 'case-detail-module' });
     }
 
-    container.innerHTML = html;
+    if (options.annotationOverlay) {
+        html += renderAnnotationProgressOverlay(status, options.overlayStartedAt || Date.now(), Boolean(annotationResult?.explanations?.length));
+    }
+
+    container.innerHTML = `<div class="case-detail-refresh-shell ${options.annotationOverlay ? 'is-refreshing' : ''}">${html}</div>`;
     container.classList.add('active');
 }
 
-async function refreshCaseAnnotation(caseId, caseData = null) {
+function renderAnnotationProgressOverlay(status, startedAt, hasPreviousResult) {
+    const rawStatus = String(status?.status || 'pending').toLowerCase();
+    const progress = Math.max(0, Math.min(100, Number(status?.progress || 0)));
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    const stageLabel = {
+        queued: '排队等待',
+        rendering: '准备图纸页面',
+        explaining: 'AI 精细图解',
+        bubble_generating: '生成气泡图和导出数据',
+        completed: '完成',
+        failed: '失败',
+    }[status?.stage] || status?.stage || '处理中';
+    const preview = status?.ai_stream_preview ? String(status.ai_stream_preview).slice(-220) : '';
+    return `
+        <div class="case-annotation-overlay">
+            <div class="case-annotation-progress-card">
+                <div class="progress-panel-header">
+                    <strong>正在刷新精细标注</strong>
+                    <span>已等待 ${elapsedSeconds} 秒</span>
+                </div>
+                <div class="progress-current">
+                    <span>${escapeHtml(stageLabel)}：${escapeHtml(status?.message || '精细标注任务正在运行')}</span>
+                </div>
+                <div class="case-annotation-progress-bar" aria-label="精细标注进度">
+                    <span style="width:${progress}%"></span>
+                </div>
+                <div class="part-info-grid case-annotation-progress-meta">
+                    <p><strong>任务状态：</strong>${escapeHtml(rawStatus)}</p>
+                    <p><strong>当前阶段：</strong>${escapeHtml(stageLabel)}</p>
+                    <p><strong>进度：</strong>${progress}%</p>
+                    <p><strong>旧结果：</strong>${hasPreviousResult ? '已保留，成功后才覆盖' : '暂无旧结果'}</p>
+                </div>
+                ${preview ? `<div class="info"><strong>AI 返回片段：</strong>${escapeHtml(preview)}</div>` : ''}
+                <div class="warning">刷新期间暂时遮挡旧页面；成功后自动展示新结果，失败时会显示失败原因并保留旧结果。</div>
+            </div>
+        </div>
+    `;
+}
+
+async function fetchCaseAnnotationResult(caseId) {
+    const resultResponse = await fetch(`${API_BASE}/cases/${encodeURIComponent(caseId)}/annotations/result`);
+    if (!resultResponse.ok) return null;
+    return resultResponse.json();
+}
+
+async function refreshCaseAnnotation(caseId, caseData = null, options = {}) {
     if (caseAnnotationPollTimer) {
         clearTimeout(caseAnnotationPollTimer);
         caseAnnotationPollTimer = null;
@@ -1961,24 +2010,77 @@ async function refreshCaseAnnotation(caseId, caseData = null) {
     });
     const statusResponse = await fetch(`${API_BASE}/cases/${encodeURIComponent(caseId)}/annotations/status`);
     const status = statusResponse.ok ? await statusResponse.json() : { status: 'not_started', progress: 0, message: '尚未启动精细标注' };
-    let result = null;
-    if (['completed', 'failed'].includes(String(status.status || '').toLowerCase())) {
-        const resultResponse = await fetch(`${API_BASE}/cases/${encodeURIComponent(caseId)}/annotations/result`);
-        if (resultResponse.ok) result = await resultResponse.json();
+    const rawStatus = String(status.status || '').toLowerCase();
+    const fallbackResult = options.fallbackResult || null;
+    const overlayStartedAt = options.overlayStartedAt || Date.now();
+    let result = fallbackResult;
+
+    if (rawStatus === 'completed') {
+        result = await fetchCaseAnnotationResult(caseId);
+        renderCaseDetail(loadedCase, status, result);
+        refreshCaseAnnotationSummary(caseId);
+        return;
+    }
+
+    if (rawStatus === 'failed') {
+        if (!result) {
+            result = await fetchCaseAnnotationResult(caseId);
+        }
+        renderCaseDetail(loadedCase, status, result);
+        refreshCaseAnnotationSummary(caseId);
+        return;
+    }
+
+    if (rawStatus === 'pending' || rawStatus === 'running') {
+        renderCaseDetail(loadedCase, status, result, {
+            annotationOverlay: true,
+            overlayStartedAt,
+        });
+        caseAnnotationPollTimer = setTimeout(
+            () => refreshCaseAnnotation(caseId, loadedCase, { fallbackResult: result, overlayStartedAt }),
+            3000,
+        );
+        return;
+    }
+
+    if (!result) {
+        result = await fetchCaseAnnotationResult(caseId);
     }
     renderCaseDetail(loadedCase, status, result);
-    if (['pending', 'running'].includes(String(status.status || '').toLowerCase())) {
-        caseAnnotationPollTimer = setTimeout(() => refreshCaseAnnotation(caseId, loadedCase), 3000);
-    }
 }
 
 async function startCaseAnnotation(caseId) {
+    const confirmed = confirm(
+        '确认刷新精细标注吗？\n\n该操作会重新调用 AI 视觉模型，可能消耗较多 token。\n成功后新结果会覆盖旧结果；失败时旧结果会保留。'
+    );
+    if (!confirmed) return;
+
+    const overlayStartedAt = Date.now();
     try {
+        const caseResponse = await fetch(`${API_BASE}/cases/${encodeURIComponent(caseId)}`);
+        if (!caseResponse.ok) throw new Error(`HTTP ${caseResponse.status}: ${await caseResponse.text()}`);
+        const caseData = await caseResponse.json();
+        const previousResult = await fetchCaseAnnotationResult(caseId);
+        renderCaseDetail(
+            caseData,
+            { status: 'pending', stage: 'queued', progress: 0, message: '正在提交精细标注刷新任务' },
+            previousResult,
+            { annotationOverlay: true, overlayStartedAt },
+        );
+
         const response = await fetch(`${API_BASE}/cases/${encodeURIComponent(caseId)}/annotations/retry`, { method: 'POST' });
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-        await refreshCaseAnnotation(caseId);
+        const job = await response.json();
+        await refreshCaseAnnotation(caseId, caseData, {
+            fallbackResult: previousResult,
+            overlayStartedAt,
+        });
+        if (job?.reused) {
+            refreshCaseAnnotationSummary(caseId);
+        }
     } catch (error) {
         alert('启动精细标注失败：' + error.message);
+        await refreshCaseAnnotation(caseId);
     }
 }
 

@@ -181,7 +181,7 @@ async def retry_case_annotation(case_id: str, background_tasks: BackgroundTasks)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="案例不存在")
     if not job.get("reused"):
-        background_tasks.add_task(case_annotation_service.run_job, case_id, job["job_id"])
+        background_tasks.add_task(case_annotation_service.run_job, case_id, job["job_id"], force_refresh=True)
     return job
 
 

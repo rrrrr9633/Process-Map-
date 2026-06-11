@@ -52,7 +52,7 @@ class CaseAnnotationService:
         result["reused"] = False
         return result
 
-    async def run_job(self, case_id: str, job_id: str) -> None:
+    async def run_job(self, case_id: str, job_id: str, *, force_refresh: bool = False) -> None:
         completed = 0
         stage = "queued"
         explanations: list[DrawingExplanation] = []
@@ -65,7 +65,7 @@ class CaseAnnotationService:
                 raise RuntimeError("案例没有绑定可复用的 uploads 图纸文件")
 
             total = len(paths)
-            existing_by_index = self._load_saved_explanations_by_index(case_id)
+            existing_by_index = {} if force_refresh else self._load_saved_explanations_by_index(case_id)
             self.update_job(
                 job_id,
                 status="running",
