@@ -108,50 +108,124 @@ class BubbleDiagramService:
         return page_explanation
 
     def _build_canvas(self, base: Image.Image, annotations: list[DrawingAnnotation]) -> Image.Image:
-        list_width = 560
-        padding = 20
-        row_height = 86
-        canvas_height = max(base.height, padding * 2 + 40 + max(1, len(annotations)) * row_height)
-        canvas = Image.new("RGB", (base.width + list_width, canvas_height), "white")
-        canvas.paste(base, (0, 0))
+        list_width = 520
+        padding = 22
+        row_height = 92
+        canvas_height = max(base.height, padding * 2 + 54 + max(1, len(annotations)) * row_height)
+        canvas = Image.new("RGBA", (base.width + list_width, canvas_height), (248, 250, 252, 255))
+        canvas.paste(base.convert("RGBA"), (0, 0))
         draw = ImageDraw.Draw(canvas)
         font = self._load_font(18)
         small = self._load_font(15)
         strong = self._load_font(20)
         canvas.info["bubble_font"] = self._font_name(font)
 
-        draw.line((base.width, 0, base.width, canvas.height), fill=(20, 20, 20), width=2)
-        draw.text((base.width + padding, padding), "气泡标注清单", fill=(0, 0, 0), font=strong)
+        draw.rounded_rectangle(
+            (base.width + 12, 14, canvas.width - 14, canvas.height - 14),
+            radius=10,
+            fill=(255, 255, 255, 255),
+            outline=(220, 226, 233, 255),
+            width=1,
+        )
+        draw.text((base.width + padding, padding), "图纸标注审阅", fill=(25, 31, 39, 255), font=strong)
+        draw.text(
+            (base.width + padding, padding + 28),
+            f"{len(annotations)} 条结构化标注",
+            fill=(100, 116, 139, 255),
+            font=small,
+        )
 
         if not annotations:
-            draw.text((base.width + padding, padding + 34), "未识别到可绘制标注", fill=(80, 80, 80), font=font)
-            return canvas
+            draw.text((base.width + padding, padding + 62), "未识别到可绘制标注", fill=(100, 116, 139, 255), font=font)
+            return canvas.convert("RGB")
 
         for index, annotation in enumerate(annotations, start=1):
             label = annotation.label or annotation.annotation_id or f"A{index:03d}"
             color = self._color(index)
             if self._has_valid_region(annotation):
                 x1, y1, x2, y2 = self._region_to_pixels(annotation, base.width, base.height)
-                draw.rectangle((x1, y1, x2, y2), outline=color, width=3)
-                bubble_x = max(8, min(base.width - 54, x1))
-                bubble_y = max(8, y1 - 32)
-                draw.ellipse((bubble_x, bubble_y, bubble_x + 46, bubble_y + 24), fill="white", outline=color, width=3)
-                draw.text((bubble_x + 7, bubble_y + 7), label[:6], fill=color, font=font)
-                draw.line((bubble_x + 23, bubble_y + 24, x1, y1), fill=color, width=2)
+                self._draw_annotation_callout(
+                    draw,
+                    annotation,
+                    label,
+                    (x1, y1, x2, y2),
+                    base.width,
+                    color,
+                    font,
+                    small,
+                )
 
-            row_y = padding + 36 + (index - 1) * 56
-            row_y = padding + 40 + (index - 1) * row_height
-            if row_y > canvas.height - 40:
+            row_y = padding + 62 + (index - 1) * row_height
+            if row_y > canvas.height - 70:
                 continue
             text = self._safe_text(annotation.parameter_name or annotation.normalized_text or annotation.raw_text or label)
             value = self._safe_text(annotation.parameter_value or annotation.normalized_text or annotation.raw_text or "待确认")
             status = self._status_label(annotation.review_status)
             summary = self._annotation_summary(annotation)
-            draw.text((base.width + padding, row_y), f"{label}  {text}", fill=color, font=strong)
-            draw.text((base.width + padding, row_y + 25), f"值：{value}  状态：{status}", fill=(55, 55, 55), font=font)
+            card_x1 = base.width + padding
+            card_y1 = row_y
+            card_x2 = canvas.width - padding
+            card_y2 = min(canvas.height - 24, row_y + row_height - 10)
+            draw.rounded_rectangle(
+                (card_x1, card_y1, card_x2, card_y2),
+                radius=8,
+                fill=(248, 250, 252, 255),
+                outline=(226, 232, 240, 255),
+                width=1,
+            )
+            draw.rounded_rectangle(
+                (card_x1 + 12, card_y1 + 14, card_x1 + 58, card_y1 + 38),
+                radius=6,
+                fill=color + (24,),
+                outline=color + (190,),
+                width=1,
+            )
+            draw.text((card_x1 + 20, card_y1 + 18), self._short_label(label, index), fill=color + (255,), font=small)
+            draw.text((card_x1 + 68, card_y1 + 12), self._fit_text(text, 32), fill=(15, 23, 42, 255), font=strong)
+            draw.text((card_x1 + 68, card_y1 + 38), f"值：{self._fit_text(value, 24)}  状态：{status}", fill=(71, 85, 105, 255), font=font)
             for line_index, line in enumerate(self._wrap_text(summary, 38)[:2]):
-                draw.text((base.width + padding, row_y + 49 + line_index * 18), line, fill=(80, 80, 80), font=small)
-        return canvas
+                draw.text((card_x1 + 68, card_y1 + 63 + line_index * 18), line, fill=(100, 116, 139, 255), font=small)
+        result = canvas.convert("RGB")
+        result.info["bubble_font"] = canvas.info.get("bubble_font", "unknown")
+        return result
+
+    def _draw_annotation_callout(
+        self,
+        draw: ImageDraw.ImageDraw,
+        annotation: DrawingAnnotation,
+        label: str,
+        region: tuple[int, int, int, int],
+        page_width: int,
+        color: tuple[int, int, int],
+        font,
+        small,
+    ) -> None:
+        x1, y1, x2, y2 = region
+        rgba = color + (255,)
+        fill = color + (28,)
+        outline = color + (185,)
+        draw.rounded_rectangle((x1, y1, x2, y2), radius=4, fill=fill, outline=outline, width=2)
+
+        value = self._safe_text(annotation.parameter_value or annotation.normalized_text or annotation.raw_text or label)
+        title = self._fit_text(f"{self._short_label(label, 0)}  {value}", 18)
+        text_box = draw.textbbox((0, 0), title, font=small)
+        tag_width = min(max(text_box[2] - text_box[0] + 22, 82), 260)
+        tag_height = 30
+        tag_x = x2 + 12 if x2 + tag_width + 18 < page_width else max(8, x1 - tag_width - 12)
+        tag_y = max(8, min(y1 - 6, y2 - tag_height + 6))
+        anchor_x = x2 if tag_x > x2 else x1
+        anchor_y = max(y1, min(y2, tag_y + tag_height // 2))
+
+        draw.line((anchor_x, anchor_y, tag_x if tag_x > x2 else tag_x + tag_width, tag_y + tag_height // 2), fill=rgba, width=2)
+        draw.rounded_rectangle(
+            (tag_x, tag_y, tag_x + tag_width, tag_y + tag_height),
+            radius=8,
+            fill=(255, 255, 255, 238),
+            outline=outline,
+            width=1,
+        )
+        draw.rounded_rectangle((tag_x, tag_y, tag_x + 8, tag_y + tag_height), radius=4, fill=rgba)
+        draw.text((tag_x + 14, tag_y + 7), title, fill=(15, 23, 42, 255), font=small)
 
     def _load_font(self, size: int):
         candidates = [
@@ -196,6 +270,18 @@ class BubbleDiagramService:
 
     def _safe_text(self, value: str) -> str:
         return normalize_engineering_text(value)
+
+    def _short_label(self, label: str, index: int) -> str:
+        text = self._safe_text(label).strip()
+        if not text or len(text) > 6:
+            return f"A{index:02d}" if index else text[:6] or "A"
+        return text
+
+    def _fit_text(self, value: str, max_chars: int) -> str:
+        text = self._safe_text(value)
+        if len(text) <= max_chars:
+            return text
+        return text[: max(1, max_chars - 1)].rstrip() + "…"
 
     def _wrap_text(self, value: str, width: int) -> list[str]:
         text = self._safe_text(value)
