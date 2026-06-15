@@ -297,6 +297,15 @@ class ResponseModule:
             operations = process_plan.get("operations") if isinstance(process_plan.get("operations"), list) else []
             parts.append(f"已生成规则工序方案，共 {len(operations)} 道工序。")
 
+        if latest.get("process_guidance") and isinstance(latest.get("process_guidance"), dict):
+            parts.append("已生成面向工艺人员的指导。")
+
+        if latest.get("final_guidance") and isinstance(latest.get("final_guidance"), dict):
+            parts.append("已汇总最终指导结果。")
+
+        if latest.get("process_drawing_plan") and isinstance(latest.get("process_drawing_plan"), dict):
+            parts.append("已生成工艺图计划。")
+
         if isinstance(validation_issues, list):
             if validation_issues:
                 parts.append(f"工序校验发现 {len(validation_issues)} 项需要关注的问题。")

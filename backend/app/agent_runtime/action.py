@@ -63,12 +63,40 @@ class ActionModule:
                 prepared["file_path"] = file_path
 
         latest_outputs = self._latest_outputs(run)
-        if tool_name in {"generate_rule_process_plan", "validate_process_plan", "build_process_guidance"}:
+        if tool_name in {
+            "generate_rule_process_plan",
+            "validate_process_plan",
+            "build_process_guidance",
+            "build_final_guidance",
+            "build_process_drawing_plan",
+        }:
             prepared.setdefault("parse_result", latest_outputs.get("parse_result"))
-        if tool_name in {"validate_process_plan", "build_process_guidance"}:
+        if tool_name in {
+            "validate_process_plan",
+            "build_process_guidance",
+            "render_process_plan_markdown",
+            "archive_process_plan_markdown",
+        }:
             prepared.setdefault("process_plan", latest_outputs.get("process_plan"))
+        if tool_name in {"render_process_plan_markdown", "archive_process_plan_markdown"}:
+            prepared.setdefault("flow", latest_outputs.get("flow") or {})
         if tool_name == "build_process_guidance":
             prepared.setdefault("annotation_result", latest_outputs.get("annotation_result") or {})
+        if tool_name in {"normalize_annotations", "map_view_annotations_to_page", "rebuild_annotation_export_rows"}:
+            prepared.setdefault("annotation_result", latest_outputs.get("annotation_result") or {})
+        if tool_name == "merge_annotation_results":
+            prepared.setdefault("annotation_results", [latest_outputs.get("annotation_result")] if latest_outputs.get("annotation_result") else [])
+        if tool_name in {"build_final_guidance", "build_process_drawing_plan"}:
+            prepared.setdefault("case", latest_outputs.get("case") or {})
+            prepared.setdefault("explanations", latest_outputs.get("explanations") or [])
+        if tool_name == "build_final_guidance":
+            prepared.setdefault("job_id", run.run_id)
+            prepared.setdefault("export_csv_url", latest_outputs.get("csv_path") or "")
+        if tool_name == "build_process_drawing_plan":
+            prepared.setdefault("job_id", run.run_id)
+            prepared.setdefault("final_guidance", latest_outputs.get("final_guidance") or {})
+        if tool_name == "render_process_drawing_assets":
+            prepared.setdefault("process_drawing_plan", latest_outputs.get("process_drawing_plan") or {})
 
         if "target_dir" not in prepared and tool_name in {"render_drawing_pages", "render_cad_preview"}:
             prepared["target_dir"] = self._default_target_dir(run, "agent_pages")
@@ -96,6 +124,22 @@ class ActionModule:
                 values["flow"] = output["flow"]
             if "annotation_result" in output:
                 values["annotation_result"] = output["annotation_result"]
+            if "validation_issues" in output:
+                values["validation_issues"] = output["validation_issues"]
+            if "process_guidance" in output:
+                values["process_guidance"] = output["process_guidance"]
+            if "final_guidance" in output:
+                values["final_guidance"] = output["final_guidance"]
+            if "process_drawing_plan" in output:
+                values["process_drawing_plan"] = output["process_drawing_plan"]
+            if "case" in output:
+                values["case"] = output["case"]
+            if "cases" in output:
+                values["cases"] = output["cases"]
+            if "explanations" in output:
+                values["explanations"] = output["explanations"]
+            if "csv_path" in output:
+                values["csv_path"] = output["csv_path"]
         return values
 
 

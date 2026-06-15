@@ -20,8 +20,8 @@ def case_agent_tools() -> list[AgentToolDefinition]:
                 description="按当前案例库条件检索历史案例；当前为基础检索，后续可升级向量检索。",
                 category=AgentToolCategory.CASE,
                 permission=AgentToolPermission.READ_ONLY,
-                input_schema={"status": "draft|reviewed|approved|archived, optional", "quality": "optional", "limit": "int"},
-                output_schema={"cases": "list of case summaries"},
+                input_schema={"query": "string, optional", "status": "draft|reviewed|approved|archived, optional", "quality": "optional", "limit": "int"},
+                output_schema={"cases": "list of case summaries", "memories": "similar long-term memory entries"},
                 model_callable=True,
                 cacheable=False,
                 max_runtime_seconds=10,
@@ -49,7 +49,20 @@ def search_cases_tool(arguments: dict[str, Any]) -> dict[str, Any]:
     status = _optional_enum(CaseStatus, arguments.get("status"))
     quality = _optional_enum(CaseQuality, arguments.get("quality"))
     limit = max(1, min(50, int(arguments.get("limit") or 10)))
-    cases = case_service.list_cases(status=status, quality=quality, limit=limit)
+    query = str(arguments.get("query") or "").strip()
+    memories = case_service.search_similar_memories(query, limit=limit) if query else []
+    memory_case_ids = [str(item.get("case_id")) for item in memories if item.get("case_id")]
+    loaded_cases = [case for case_id in memory_case_ids for case in [case_service.load_case(case_id)] if case]
+    fallback_cases = case_service.list_cases(status=status, quality=quality, limit=limit)
+    seen: set[str] = set()
+    cases = []
+    for case in [*loaded_cases, *fallback_cases]:
+        if case.case_id in seen:
+            continue
+        seen.add(case.case_id)
+        cases.append(case)
+        if len(cases) >= limit:
+            break
     return {
         "cases": [
             {
@@ -63,7 +76,20 @@ def search_cases_tool(arguments: dict[str, Any]) -> dict[str, Any]:
                 "updated_at": case.updated_at.isoformat(),
             }
             for case in cases
-        ]
+        ],
+        "memories": [
+            {
+                "memory_id": item.get("memory_id"),
+                "kind": item.get("kind"),
+                "case_id": item.get("case_id"),
+                "title": item.get("title"),
+                "score": item.get("score"),
+                "quality": item.get("quality"),
+                "ai_error_count": item.get("ai_error_count"),
+                "human_edit_count": item.get("human_edit_count"),
+            }
+            for item in memories
+        ],
     }
 
 

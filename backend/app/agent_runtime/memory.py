@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.agent_runtime.state import AgentRun
+from app.agent_runtime.skills import agent_skillset
 from app.agent_tools.contracts import AgentToolObservation
 
 
@@ -50,7 +51,33 @@ class MemoryModule:
                 "source": "knowledge_base",
                 "hint": "业务长期记忆当前由案例库和 knowledge_base 目录承载。",
             },
+            *agent_skillset.case_memory_hints(perception=perception),
         ]
+        short_term["skill_hints"] = agent_skillset.planner_rules(
+            perception=perception,
+            available_tool_names={
+                "parse_drawing",
+                "render_drawing_pages",
+                "analyze_3d_geometry",
+                "render_cad_preview",
+                "search_cases",
+                "load_case_summary",
+                "generate_rule_process_plan",
+                "validate_process_plan",
+                "build_process_guidance",
+                "build_final_guidance",
+                "build_process_drawing_plan",
+                "render_process_drawing_assets",
+                "render_process_plan_markdown",
+                "archive_process_plan_markdown",
+                "export_annotations",
+                "save_case",
+                "update_case_status",
+                "add_case_human_edit",
+                "mark_case_ai_error",
+                "get_case_storage_status",
+            },
+        )
         return AgentMemorySnapshot(short_term=short_term, long_term_refs=long_term_refs)
 
 

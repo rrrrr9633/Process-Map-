@@ -49,10 +49,13 @@ class CaseService:
                 else:
                     session.add(record)
                 session.commit()
+            self._sync_case_memory(case)
             return case.case_id
         except SQLAlchemyError as exc:
             print(f"[case] mysql save failed, fallback to json: {type(exc).__name__}: {exc}", flush=True)
-            return self._save_legacy_json_case(case)
+            case_id = self._save_legacy_json_case(case)
+            self._sync_case_memory(case)
+            return case_id
 
     def load_case(self, case_id: str) -> Optional[ProcessCase]:
         try:
@@ -164,6 +167,7 @@ class CaseService:
             return False
         case.human_edits.append(edit)
         self.save_case(case)
+        self._record_human_edit_memory(case, edit)
         return True
 
     def mark_ai_error(self, case_id: str, error_description: str) -> bool:
@@ -172,6 +176,7 @@ class CaseService:
             return False
         case.ai_errors.append(error_description)
         self.save_case(case)
+        self._record_ai_error_memory(case, error_description)
         return True
 
     def update_status(
@@ -195,7 +200,26 @@ class CaseService:
         return True
 
     def get_similar_cases(self, drawing_info: dict, limit: int = 5) -> List[ProcessCase]:
+        query = json.dumps(drawing_info, ensure_ascii=False)
+        try:
+            from app.agent_runtime.long_term_memory import long_term_memory_service
+
+            memories = long_term_memory_service.search(query, limit=limit)
+            case_ids = [item.get("case_id") for item in memories if item.get("case_id")]
+            cases = [case for case_id in case_ids for case in [self.load_case(str(case_id))] if case]
+            if cases:
+                return cases[:limit]
+        except Exception:
+            pass
         return self.list_cases(status=CaseStatus.APPROVED, limit=limit)
+
+    def search_similar_memories(self, query: str, limit: int = 5) -> list[dict]:
+        try:
+            from app.agent_runtime.long_term_memory import long_term_memory_service
+
+            return long_term_memory_service.search(query, limit=limit)
+        except Exception:
+            return []
 
     def _case_to_record(self, case: ProcessCase) -> CaseRecord:
         return CaseRecord(
@@ -271,6 +295,30 @@ class CaseService:
         )
         tmp_path.replace(file_path)
         return case.case_id
+
+    def _sync_case_memory(self, case: ProcessCase) -> None:
+        try:
+            from app.agent_runtime.long_term_memory import long_term_memory_service
+
+            long_term_memory_service.index_case(case)
+        except Exception as exc:
+            print(f"[case] memory index failed: {type(exc).__name__}: {exc}", flush=True)
+
+    def _record_human_edit_memory(self, case: ProcessCase, edit: HumanEdit) -> None:
+        try:
+            from app.agent_runtime.long_term_memory import long_term_memory_service
+
+            long_term_memory_service.record_human_edit(case, edit)
+        except Exception as exc:
+            print(f"[case] human edit memory failed: {type(exc).__name__}: {exc}", flush=True)
+
+    def _record_ai_error_memory(self, case: ProcessCase, error_description: str) -> None:
+        try:
+            from app.agent_runtime.long_term_memory import long_term_memory_service
+
+            long_term_memory_service.record_ai_error(case, error_description)
+        except Exception as exc:
+            print(f"[case] ai error memory failed: {type(exc).__name__}: {exc}", flush=True)
 
     def _list_legacy_json_cases(
         self,

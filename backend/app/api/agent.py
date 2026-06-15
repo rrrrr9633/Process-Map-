@@ -275,6 +275,15 @@ async def _run_agent_job(job_id: str, raw_request: dict, session_id: str) -> Non
     try:
         request = AutoAgentRunRequest.model_validate(raw_request)
         session = agent_session_store.get_or_create(session_id)
+
+        async def update_progress(stage: str, message: str, progress: int) -> None:
+            agent_job_store.update(
+                job_id,
+                stage=stage,
+                message=message,
+                progress=max(0, min(99, progress)),
+            )
+
         agent_job_store.update(job_id, stage="perception", message="Agent 正在读取会话和附件", progress=15)
         session_files = [item.get("file_path") for item in session.uploaded_files if item.get("file_path")]
         input_files = list(dict.fromkeys([*session_files, *request.input_files]))
@@ -293,8 +302,9 @@ async def _run_agent_job(job_id: str, raw_request: dict, session_id: str) -> Non
             max_steps=request.max_steps,
             human_confirmed_tools=request.human_confirmed_tools,
             initial_context=context,
+            progress_callback=update_progress,
         )
-        agent_job_store.update(job_id, stage="response", message="Agent 正在整理成可读回复", progress=80)
+        agent_job_store.update(job_id, stage="response", message="Agent 正在整理成可读回复", progress=85)
         payload = await response_module.to_chat_response(
             run,
             user_message=request.user_message,

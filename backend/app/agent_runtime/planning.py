@@ -74,6 +74,8 @@ class PlanningModule:
         }
         latest_outputs = _latest_outputs(observations) or _latest_outputs_from_last_run(last_run)
         has_process_goal = str(perception.get("intent") or "") == "process_generation"
+        has_case_goal = str(perception.get("intent") or "") == "case_management"
+        has_export_goal = str(perception.get("intent") or "") == "export"
 
         if "parse_drawing" in available_tool_names and "parse_drawing" in recommended and "parse_drawing" not in called:
             return AgentPlanDecision(
@@ -84,6 +86,21 @@ class PlanningModule:
                 arguments={},
                 confidence=0.75,
                 reason="Planner 未给出可执行动作，按感知模块推荐先解析图纸。",
+            )
+        if (
+            has_process_goal
+            and "search_cases" in available_tool_names
+            and latest_outputs.get("parse_result")
+            and "search_cases" not in called
+        ):
+            return AgentPlanDecision(
+                intent="process_generation",
+                plan=[{"step_no": 2, "title": "检索历史案例", "purpose": "利用长期案例记忆修正工艺路线", "tool_name": "search_cases", "status": "pending"}],
+                action="tool",
+                tool_name="search_cases",
+                arguments={"limit": 5},
+                confidence=0.72,
+                reason="已有图纸解析结果，先检索历史案例作为经验参考。",
             )
         if (
             has_process_goal
@@ -115,6 +132,51 @@ class PlanningModule:
                 arguments={},
                 confidence=0.72,
                 reason="已有解析结果和工序方案，继续做规则校验。",
+            )
+        if (
+            has_process_goal
+            and "build_process_guidance" in available_tool_names
+            and latest_outputs.get("parse_result")
+            and latest_outputs.get("process_plan")
+            and "build_process_guidance" not in called
+        ):
+            return AgentPlanDecision(
+                intent="process_generation",
+                plan=[{"step_no": 4, "title": "生成工艺指导", "purpose": "把解析和工序转成可执行指导", "tool_name": "build_process_guidance", "status": "pending"}],
+                action="tool",
+                tool_name="build_process_guidance",
+                arguments={},
+                confidence=0.72,
+                reason="已有解析结果和工序方案，继续生成工艺指导。",
+            )
+        if (
+            has_export_goal
+            and "render_process_plan_markdown" in available_tool_names
+            and latest_outputs.get("process_plan")
+            and "render_process_plan_markdown" not in called
+        ):
+            return AgentPlanDecision(
+                intent="export",
+                plan=[{"step_no": 1, "title": "生成导出预览", "purpose": "先生成 Markdown 文本供确认", "tool_name": "render_process_plan_markdown", "status": "pending"}],
+                action="tool",
+                tool_name="render_process_plan_markdown",
+                arguments={},
+                confidence=0.7,
+                reason="用户要求导出，先生成不落盘的工序说明预览。",
+            )
+        if (
+            has_case_goal
+            and "search_cases" in available_tool_names
+            and "search_cases" not in called
+        ):
+            return AgentPlanDecision(
+                intent="case_management",
+                plan=[{"step_no": 1, "title": "检索案例库", "purpose": "先读取现有案例，避免重复保存或误改", "tool_name": "search_cases", "status": "pending"}],
+                action="tool",
+                tool_name="search_cases",
+                arguments={"limit": 10},
+                confidence=0.7,
+                reason="案例管理需求先检索案例库。",
             )
         if observations:
             return AgentPlanDecision(

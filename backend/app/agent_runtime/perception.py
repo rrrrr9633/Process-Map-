@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.agent_runtime.skills import agent_skillset
+
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 UPLOADS_DIR = BACKEND_DIR / "uploads"
@@ -43,6 +45,8 @@ class PerceptionModule:
         requested_output = self._detect_requested_output(goal=goal, user_message=user_message)
         file_summaries = [self._file_summary(item) for item in files]
         recommended_tools = self._recommended_tools(intent=intent, files=files)
+        if context:
+            recommended_tools = list(dict.fromkeys([*recommended_tools, *self._skill_recommended_tools(intent, context, files)]))
 
         warnings: list[str] = []
         for summary in file_summaries:
@@ -135,6 +139,37 @@ class PerceptionModule:
         if intent == "system_status":
             tools.append("get_case_storage_status")
         return list(dict.fromkeys(tools))
+
+    def _skill_recommended_tools(self, intent: str, context: dict[str, Any], files: list[str]) -> list[str]:
+        perception = {
+            "intent": intent,
+            "input_files": files,
+            "goal": context.get("goal") or "",
+            "requested_output": self._detect_requested_output(goal=context.get("goal") or "", user_message=context.get("user_message") or ""),
+        }
+        routes = agent_skillset.routing_hints(perception=perception, available_tool_names={
+            "parse_drawing",
+            "render_drawing_pages",
+            "analyze_3d_geometry",
+            "render_cad_preview",
+            "search_cases",
+            "load_case_summary",
+            "generate_rule_process_plan",
+            "validate_process_plan",
+            "build_process_guidance",
+            "build_final_guidance",
+            "build_process_drawing_plan",
+            "render_process_drawing_assets",
+            "render_process_plan_markdown",
+            "archive_process_plan_markdown",
+            "export_annotations",
+            "save_case",
+            "update_case_status",
+            "add_case_human_edit",
+            "mark_case_ai_error",
+            "get_case_storage_status",
+        })
+        return [item["tool_name"] for item in routes]
 
 
 perception_module = PerceptionModule()

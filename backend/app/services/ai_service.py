@@ -76,6 +76,16 @@ class AIService:
                             "max_permission": max_permission,
                             "tools": tool_specs,
                             "observations": observations[-8:],
+                            "business_skill_rules": (
+                                observations[-1].get("short_term", {}).get("skill_hints", [])
+                                if observations and isinstance(observations[-1], dict)
+                                else []
+                            ),
+                            "long_term_memory_refs": (
+                                observations[-1].get("long_term_refs", [])
+                                if observations and isinstance(observations[-1], dict)
+                                else []
+                            ),
                             "output_schema": {
                                 "intent": "用户意图分类，例如 drawing_analysis|process_generation|case_management|export|system_status|general_chat",
                                 "plan": [
@@ -106,7 +116,11 @@ class AIService:
                                 "写入、导出、保存类工具如果没有人工确认，执行器会暂停；你仍可提出该工具调用，但 reason 必须说明需要确认。",
                                 "如果最近 observation 已经足以回答目标，输出 final。",
                                 "如果还没有任何工具 observation，且用户提供了文件，必须优先调用 parse_drawing，不要只输出计划。",
+                                "如果目标涉及工序生成，优先检索历史案例 search_cases，再结合 parse_drawing 结果生成工序。",
                                 "如果已有 parse_drawing observation 且目标涉及工序，下一步优先调用 generate_rule_process_plan。",
+                                "如果已有 process_plan，必须优先调用 validate_process_plan 做质检校验，除非用户只问解释。",
+                                "如果已有 parse_result 和 process_plan，优先调用 build_process_guidance 生成工艺指导。",
+                                "遵守 business_skill_rules；这些规则来自系统业务技能层，优先级高于自由发挥。",
                                 "arguments 必须是合法 JSON object，不要把 JSON 字符串塞进 arguments。",
                                 "confidence 低于 0.5 时，除非是只读状态查询，否则优先 final 提问，不要贸然调用工具。",
                             ],
