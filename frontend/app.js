@@ -27,12 +27,15 @@ let agentUploadedFiles = [];
 let agentConversation = [];
 let lastAgentResponse = null;
 let agentSessionId = window.localStorage.getItem('cutr_agent_session_id') || '';
+let isAgentSending = false;
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
     mermaid.initialize({ startOnLoad: false, theme: 'default' });
     bindFileUploadPreview();
+    bindAgentChatInput();
     bindModelProfileSwitcher();
+    restoreAgentSessionIfNeeded();
     loadConfigStatus();
 });
 
@@ -99,10 +102,25 @@ function toggleAgentMode() {
     const panel = document.getElementById('agent-chat-panel');
     const button = document.getElementById('generate-process-btn');
     if (panel) panel.style.display = enabled ? 'block' : 'none';
-    if (button) button.textContent = enabled ? '启动 Agent 分析' : '生成工序方案';
+    if (button) button.textContent = enabled ? '用当前表单问 Agent' : '生成工序方案';
+    if (enabled) {
+        restoreAgentSessionIfNeeded().catch(error => console.error(error));
+        document.getElementById('agent-chat-input')?.focus();
+    }
 }
 
 window.toggleAgentMode = toggleAgentMode;
+
+function bindAgentChatInput() {
+    const input = document.getElementById('agent-chat-input');
+    if (!input) return;
+    input.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            sendAgentMessage();
+        }
+    });
+}
 
 function appendAgentMessage(role, content) {
     const messages = document.getElementById('agent-chat-messages');
@@ -115,11 +133,48 @@ function appendAgentMessage(role, content) {
     return node;
 }
 
+function appendAgentResponse(run) {
+    const messages = document.getElementById('agent-chat-messages');
+    if (!messages) return;
+    lastAgentResponse = run;
+    const node = document.createElement('div');
+    node.className = 'agent-message agent-message-assistant agent-response-message';
+    node.innerHTML = `
+        <div class="agent-response-text">${escapeHtml(summarizeAgentRun(run))}</div>
+        ${renderAgentBusinessCards(run)}
+        ${renderAgentActions(run.actions || [])}
+        ${renderAgentSuggestedReplies(run.suggested_replies || [])}
+        <details class="technical-flow-details agent-chat-technical">
+            <summary>查看运行轨迹</summary>
+            <pre>${escapeHtml(JSON.stringify(run.run || run, null, 2))}</pre>
+        </details>
+    `;
+    messages.appendChild(node);
+    messages.scrollTop = messages.scrollHeight;
+    return node;
+}
+
+function renderAgentSuggestedReplies(replies) {
+    if (!Array.isArray(replies) || !replies.length) return '';
+    return `
+        <div class="agent-suggested-replies">
+            ${replies.slice(0, 5).map(reply => `<button class="btn btn-sm" type="button" onclick="sendAgentSuggestedReply('${escapeJsString(reply)}')">${escapeHtml(reply)}</button>`).join('')}
+        </div>
+    `;
+}
+
+function sendAgentSuggestedReply(reply) {
+    const input = document.getElementById('agent-chat-input');
+    if (input) input.value = reply;
+    sendAgentMessage();
+}
+
 function clearAgentChat() {
     agentUploadedFiles = [];
     agentConversation = [];
     const input = document.getElementById('agent-chat-input');
     const fileInput = document.getElementById('agent-file-input');
+    const sendButton = document.getElementById('agent-send-btn');
     const messages = document.getElementById('agent-chat-messages');
     if (input) input.value = '';
     if (fileInput) fileInput.value = '';
@@ -169,6 +224,36 @@ async function ensureAgentSession() {
     return agentSessionId;
 }
 
+async function restoreAgentSessionIfNeeded() {
+    const panel = document.getElementById('agent-chat-panel');
+    const messages = document.getElementById('agent-chat-messages');
+    if (!agentSessionId || !messages) {
+        if (document.getElementById('use-agent-mode')?.checked) {
+            await ensureAgentSession();
+        }
+        return;
+    }
+    if (messages.dataset.restoredSessionId === agentSessionId) return;
+    const response = await fetch(`${API_BASE}/agent/sessions/${encodeURIComponent(agentSessionId)}`);
+    if (!response.ok) return;
+    const data = await response.json();
+    const session = data.session || {};
+    const sessionMessages = Array.isArray(session.messages) ? session.messages : [];
+    if (!sessionMessages.length) return;
+    messages.innerHTML = '';
+    for (const item of sessionMessages.slice(-12)) {
+        if (item.payload && item.payload.run) {
+            appendAgentResponse(item.payload);
+        } else {
+            appendAgentMessage(item.role || 'system', item.content || '');
+        }
+    }
+    messages.dataset.restoredSessionId = agentSessionId;
+    if (panel && document.getElementById('use-agent-mode')?.checked) {
+        panel.style.display = 'block';
+    }
+}
+
 function summarizeAgentRun(run) {
     if (!run) return 'Agent 没有返回运行结果。';
     const actualRun = run.run || run;
@@ -193,24 +278,115 @@ function renderAgentRunResult(run) {
     const result = document.getElementById('generate-result');
     if (!result) return;
     lastAgentResponse = run;
+    const isAgentMode = Boolean(document.getElementById('use-agent-mode')?.checked);
     const actualRun = run.run || run;
     const cards = run.cards || [];
     const actions = run.actions || [];
-    const cardHtml = cards.map(renderAgentCard).join('');
+    const highlights = run.highlights || [];
+    const businessCardHtml = renderAgentBusinessCards(run);
+    const visibleCardHtml = cards.filter(card => card.kind === 'plan').map(renderAgentCard).join('');
+    const technicalCardHtml = cards.filter(card => card.kind === 'technical').map(renderAgentCard).join('');
     const actionHtml = renderAgentActions(actions);
     result.innerHTML = `
         <div class="result-section">
-            <h3>Agent 状态</h3>
+            <h3>${isAgentMode ? 'Agent 详情' : 'Agent 状态'}</h3>
             <div class="agent-run-status">${escapeHtml(summarizeAgentRun(run))}</div>
+            ${highlights.length ? `
+                <div class="agent-highlights">
+                    ${highlights.map(item => `<div class="agent-highlight">${escapeHtml(item)}</div>`).join('')}
+                </div>
+            ` : ''}
+            ${businessCardHtml}
+            ${visibleCardHtml}
             ${actionHtml}
             <details class="technical-flow-details">
                 <summary>查看计划和运行轨迹</summary>
-                ${cardHtml}
+                ${technicalCardHtml}
                 <pre>${escapeHtml(JSON.stringify(actualRun, null, 2))}</pre>
             </details>
         </div>
     `;
-    result.classList.add('active');
+    result.classList.toggle('active', !isAgentMode);
+}
+
+function renderAgentBusinessCards(run) {
+    const cards = run.business_cards || [];
+    if (!cards.length) return '';
+    return `<div class="agent-business-cards">${cards.map(renderAgentBusinessCard).join('')}</div>`;
+}
+
+function renderAgentBusinessCard(card) {
+    if (card.kind === 'drawing_summary') {
+        const content = card.content || {};
+        const facts = [
+            ['零件', content.part_name],
+            ['图号', content.drawing_no],
+            ['材料', content.material],
+            ['热处理', content.heat_treatment],
+            ['特征', content.feature_count ? `${content.feature_count} 项` : ''],
+            ['公差/粗糙度', content.tolerance_count ? `${content.tolerance_count} 项` : ''],
+            ['风险', content.risk_count ? `${content.risk_count} 项` : '0 项'],
+        ].filter(([, value]) => value !== undefined && value !== null && String(value).trim());
+        return `
+            <div class="agent-business-card">
+                <strong>${escapeHtml(card.title || '图纸识别摘要')}</strong>
+                <div class="agent-fact-grid">
+                    ${facts.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b></div>`).join('')}
+                </div>
+                ${Array.isArray(content.key_features) && content.key_features.length ? `<p>关键特征：${escapeHtml(content.key_features.filter(Boolean).join('、'))}</p>` : ''}
+                ${Array.isArray(content.key_requirements) && content.key_requirements.length ? `<p>技术要求：${escapeHtml(content.key_requirements.filter(Boolean).join('；'))}</p>` : ''}
+            </div>
+        `;
+    }
+    if (card.kind === 'process_operations' && Array.isArray(card.items)) {
+        return `
+            <div class="agent-business-card">
+                <strong>${escapeHtml(card.title || '工序方案')}</strong>
+                <div class="agent-operation-list">
+                    ${card.items.map(operation => `
+                        <div class="agent-operation-item">
+                            <div class="agent-operation-head">
+                                <span>${escapeHtml(operation.operation_no || 'OP')}</span>
+                                <b>${escapeHtml(operation.operation_name || '未命名工序')}</b>
+                            </div>
+                            <p>${escapeHtml(operation.content || '')}</p>
+                            ${renderAgentMiniList('设备/工具', [...(operation.equipment || []), ...(operation.tools || [])])}
+                            ${renderAgentMiniList('质控点', operation.quality_gates || [])}
+                            ${renderAgentMiniList('检验项', operation.inspection_items || [])}
+                            ${operation.requires_manual_review ? '<small>需要人工复核</small>' : ''}
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }
+    if (card.kind === 'validation_issues' && Array.isArray(card.items)) {
+        return `
+            <div class="agent-business-card">
+                <strong>${escapeHtml(card.title || '校验与风险')}</strong>
+                <ul class="agent-bullet-list">
+                    ${card.items.map(issue => `<li>${escapeHtml([issue.operation_no, issue.severity, issue.message].filter(Boolean).join(' - '))}</li>`).join('')}
+                </ul>
+            </div>
+        `;
+    }
+    if (card.kind === 'next_steps' && Array.isArray(card.items)) {
+        return `
+            <div class="agent-business-card">
+                <strong>${escapeHtml(card.title || '下一步建议')}</strong>
+                <ul class="agent-bullet-list">
+                    ${card.items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}
+                </ul>
+            </div>
+        `;
+    }
+    return '';
+}
+
+function renderAgentMiniList(label, items) {
+    const values = (items || []).filter(Boolean).slice(0, 5);
+    if (!values.length) return '';
+    return `<div class="agent-mini-list"><span>${escapeHtml(label)}：</span>${values.map(item => `<em>${escapeHtml(item)}</em>`).join('')}</div>`;
 }
 
 function renderAgentActions(actions) {
@@ -245,14 +421,13 @@ async function handleAgentAction(index) {
             alert('缺少需要确认的工具名');
             return;
         }
-        const confirmed = confirm(`确认继续执行工具：${toolName}？`);
+        const confirmed = confirm(`${action.label || '确认继续执行'}？`);
         if (!confirmed) return;
         try {
             appendAgentMessage('user', `确认继续执行：${toolName}`);
             const response = await continueAgentWithConfirmation(toolName);
             const summary = summarizeAgentRun(response);
-            appendAgentMessage('assistant', summary);
-            appendAgentActions(response.actions || []);
+            appendAgentResponse(response);
             agentConversation.push({ role: 'assistant', content: summary, run_id: response.run?.run_id || response.run_id, status: response.status || response.run?.status });
             renderAgentRunResult(response);
         } catch (error) {
@@ -286,6 +461,22 @@ async function continueAgentWithConfirmation(toolName) {
 }
 
 function renderAgentCard(card) {
+    if (card.kind === 'summary') {
+        return `
+            <div class="agent-result-card">
+                <strong>${escapeHtml(card.title || '本轮结论')}</strong>
+                <p>${escapeHtml(card.content?.message || '本轮已完成。')}</p>
+            </div>
+        `;
+    }
+    if (card.kind === 'tool_summary') {
+        return `
+            <div class="agent-result-card">
+                <strong>${escapeHtml(card.title || '最近工具')}</strong>
+                <p>${escapeHtml(card.content || '工具已返回结果。')}</p>
+            </div>
+        `;
+    }
     if (card.kind === 'plan' && Array.isArray(card.items)) {
         return `
             <div class="agent-result-card">
@@ -322,6 +513,26 @@ function renderAgentCard(card) {
             <div class="agent-result-card">
                 <strong>${escapeHtml(card.title || 'Agent 结果')}</strong>
                 <p>${escapeHtml(summary || '本轮 Agent 已完成。')}</p>
+            </div>
+        `;
+    }
+    if (card.kind === 'risks' && Array.isArray(card.items)) {
+        return `
+            <div class="agent-result-card">
+                <strong>${escapeHtml(card.title || '需要复核的点')}</strong>
+                <ul class="agent-bullet-list">
+                    ${card.items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}
+                </ul>
+            </div>
+        `;
+    }
+    if (card.kind === 'questions' && Array.isArray(card.items)) {
+        return `
+            <div class="agent-result-card">
+                <strong>${escapeHtml(card.title || '还需要确认')}</strong>
+                <ul class="agent-bullet-list">
+                    ${card.items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}
+                </ul>
             </div>
         `;
     }
@@ -388,6 +599,7 @@ async function runAgentConversation(message, files = []) {
 }
 
 async function sendAgentMessage() {
+    if (isAgentSending) return;
     const input = document.getElementById('agent-chat-input');
     const fileInput = document.getElementById('agent-file-input');
     const message = (input?.value || '').trim();
@@ -400,17 +612,30 @@ async function sendAgentMessage() {
     agentConversation.push({ role: 'user', content: message, file_count: files.length });
     if (input) input.value = '';
     if (fileInput) fileInput.value = '';
+    isAgentSending = true;
+    if (sendButton) {
+        sendButton.disabled = true;
+        sendButton.textContent = 'Agent 回复中...';
+    }
     try {
-        appendAgentMessage('system', 'Agent 正在感知输入、规划工具并执行...');
+        appendAgentMessage('system', files.length
+            ? `已收到文件：${files.map(file => file.name).join('、')}。Agent 正在感知输入、自动调用工具，并整理成可读回复...`
+            : 'Agent 正在理解你的问题、自动选择工具，并整理成可读回复...'
+        );
         const run = await runAgentConversation(message, files);
         const summary = summarizeAgentRun(run);
-        appendAgentMessage('assistant', summary);
-        appendAgentActions(run.actions || []);
+        appendAgentResponse(run);
         agentConversation.push({ role: 'assistant', content: summary, run_id: run.run?.run_id || run.run_id, status: run.status || run.run?.status });
         renderAgentRunResult(run);
     } catch (error) {
         appendAgentMessage('assistant', `失败：${error.message}`);
         console.error(error);
+    } finally {
+        isAgentSending = false;
+        if (sendButton) {
+            sendButton.disabled = false;
+            sendButton.textContent = '发送给 Agent';
+        }
     }
 }
 
@@ -502,6 +727,14 @@ function escapeHtml(value) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+}
+
+function escapeJsString(value) {
+    return String(value)
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '');
 }
 
 function buildGenerationAiResponse(data) {
@@ -1259,7 +1492,7 @@ function resetGenerateButton(loading, generateButton) {
     isGeneratingProcess = false;
     if (generateButton) {
         generateButton.disabled = false;
-        generateButton.textContent = document.getElementById('use-agent-mode')?.checked ? '启动 Agent 分析' : '生成工序方案';
+        generateButton.textContent = document.getElementById('use-agent-mode')?.checked ? '用当前表单问 Agent' : '生成工序方案';
         delete generateButton.dataset.generating;
     }
 }
@@ -1356,8 +1589,7 @@ async function generateProcess() {
             agentConversation.push({ role: 'user', content: message, file_count: files.length });
             const run = await runAgentConversation(message, files);
             const summary = summarizeAgentRun(run);
-            appendAgentMessage('assistant', summary);
-            appendAgentActions(run.actions || []);
+            appendAgentResponse(run);
             agentConversation.push({ role: 'assistant', content: summary, run_id: run.run?.run_id || run.run_id, status: run.status || run.run?.status });
             renderAgentRunResult(run);
             setGenerationProgress('Agent 运行完成', `状态：${run.status || run.run?.status || 'unknown'}`, startedAt, [], 'result');
@@ -1552,7 +1784,7 @@ async function generateProcess() {
             isGeneratingProcess = false;
             if (generateButton) {
                 generateButton.disabled = false;
-                generateButton.textContent = document.getElementById('use-agent-mode')?.checked ? '启动 Agent 分析' : '生成工序方案';
+                generateButton.textContent = document.getElementById('use-agent-mode')?.checked ? '用当前表单问 Agent' : '生成工序方案';
                 delete generateButton.dataset.generating;
             }
         } else {
@@ -2635,6 +2867,8 @@ Object.assign(window, {
     toggleInputMethod,
     toggleAgentMode,
     sendAgentMessage,
+    sendAgentSuggestedReply,
+    restoreAgentSessionIfNeeded,
     clearAgentChat,
     startNewAgentSession,
     handleAgentAction,

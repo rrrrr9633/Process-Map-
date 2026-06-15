@@ -216,6 +216,8 @@ async def run_auto_agent(request: AutoAgentRunRequest) -> dict:
         context = {
             **request.initial_context,
             "session": agent_session_store.public_dict(session),
+            "last_run": session.last_run or {},
+            "recent_messages": [message.model_dump(mode="json") for message in session.messages[-12:]],
         }
         run = await agent_planner.run(
             goal=request.goal,
@@ -226,7 +228,11 @@ async def run_auto_agent(request: AutoAgentRunRequest) -> dict:
             human_confirmed_tools=request.human_confirmed_tools,
             initial_context=context,
         )
-        payload = response_module.to_chat_response(run)
+        payload = await response_module.to_chat_response(
+            run,
+            user_message=request.user_message,
+            conversation=[message.model_dump(mode="json") for message in session.messages[-12:]],
+        )
         agent_session_store.append_message(session, role="assistant", content=payload["assistant_message"], payload=payload)
         agent_session_store.set_last_run(session, payload)
         payload["session"] = agent_session_store.public_dict(session)
@@ -236,7 +242,7 @@ async def run_auto_agent(request: AutoAgentRunRequest) -> dict:
 
 
 @router.post("/runs/confirm-tool")
-def confirm_agent_tool(request: ConfirmToolRunRequest) -> dict:
+async def confirm_agent_tool(request: ConfirmToolRunRequest) -> dict:
     init_agent_tools()
     try:
         session = agent_session_store.get_or_create(request.session_id or None)
@@ -248,7 +254,11 @@ def confirm_agent_tool(request: ConfirmToolRunRequest) -> dict:
             max_permission=request.max_permission,
             human_confirmed=True,
         )
-        payload = response_module.to_chat_response(run)
+        payload = await response_module.to_chat_response(
+            run,
+            user_message=f"确认执行：{request.tool_name}",
+            conversation=[message.model_dump(mode="json") for message in session.messages[-12:]],
+        )
         agent_session_store.append_message(session, role="user", content=f"确认执行工具：{request.tool_name}")
         agent_session_store.append_message(session, role="assistant", content=payload["assistant_message"], payload=payload)
         agent_session_store.set_last_run(session, payload)

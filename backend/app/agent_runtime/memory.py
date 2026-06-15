@@ -31,6 +31,12 @@ class MemoryModule:
             "plan": run.plan[-6:],
             "input_files": run.input_files,
             "perception": perception,
+            "conversation": perception.get("initial_context", {}).get("recent_messages", [])[-12:]
+            if isinstance(perception.get("initial_context"), dict)
+            else [],
+            "last_run": perception.get("initial_context", {}).get("last_run", {})
+            if isinstance(perception.get("initial_context"), dict)
+            else {},
             "recent_observations": recent_observations,
             "risks": run.risks[-8:],
             "questions": run.questions[-8:],

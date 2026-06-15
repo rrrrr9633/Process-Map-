@@ -65,13 +65,14 @@ class PlanningModule:
             return None
         perception = short_term.get("perception") if isinstance(short_term.get("perception"), dict) else {}
         observations = short_term.get("recent_observations") if isinstance(short_term.get("recent_observations"), list) else []
+        last_run = short_term.get("last_run") if isinstance(short_term.get("last_run"), dict) else {}
         recommended = perception.get("recommended_tools") if isinstance(perception.get("recommended_tools"), list) else []
         called = {
             str(item.get("tool_name"))
             for item in observations
             if isinstance(item, dict) and item.get("tool_name")
         }
-        latest_outputs = _latest_outputs(observations)
+        latest_outputs = _latest_outputs(observations) or _latest_outputs_from_last_run(last_run)
         has_process_goal = str(perception.get("intent") or "") == "process_generation"
 
         if "parse_drawing" in available_tool_names and "parse_drawing" in recommended and "parse_drawing" not in called:
@@ -124,6 +125,27 @@ class PlanningModule:
                 confidence=0.7,
                 reason="已获得可用工具结果，输出本轮汇总。",
             )
+        if latest_outputs:
+            return AgentPlanDecision(
+                intent=str(perception.get("intent") or "general_chat"),
+                plan=[],
+                action="final",
+                final_result=_final_result_from_outputs(latest_outputs),
+                confidence=0.7,
+                reason="根据会话中的上一轮 Agent 结果回答用户追问。",
+            )
+        if str(perception.get("intent") or "") == "general_chat" and perception.get("user_message"):
+            return AgentPlanDecision(
+                intent="general_chat",
+                plan=[],
+                action="final",
+                final_result={
+                    "summary": "我已经收到你的问题。你可以继续描述要分析的图纸、工序目标或上传文件，我会根据上下文继续处理。",
+                    "assistant_message": "我已经收到你的问题。你可以继续描述要分析的图纸、工序目标或上传文件，我会根据上下文继续处理。",
+                },
+                confidence=0.7,
+                reason="普通对话无需调用工具。",
+            )
         return None
 
 
@@ -174,6 +196,32 @@ def _final_result_from_observations(observations: list[Any]) -> dict[str, Any]:
     return {
         "summary": "，".join(summary_parts) + "。",
         "tool_names": tool_names,
+        "latest_outputs": latest,
+    }
+
+
+def _latest_outputs_from_last_run(last_run: dict[str, Any]) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    final_result = last_run.get("run", {}).get("final_result") if isinstance(last_run.get("run"), dict) else {}
+    if isinstance(final_result, dict) and isinstance(final_result.get("latest_outputs"), dict):
+        values.update(final_result["latest_outputs"])
+    last_observation = last_run.get("last_observation") if isinstance(last_run.get("last_observation"), dict) else {}
+    output = last_observation.get("output") if isinstance(last_observation.get("output"), dict) else {}
+    values.update(output)
+    return values
+
+
+def _final_result_from_outputs(latest: dict[str, Any]) -> dict[str, Any]:
+    summary_parts: list[str] = []
+    if latest.get("parse_result"):
+        summary_parts.append("我会基于上一轮图纸解析结果继续回答")
+    if latest.get("process_plan"):
+        summary_parts.append("上一轮已有工序方案，可继续解释工序顺序、风险或导出结果")
+    if "validation_issues" in latest:
+        issues = latest.get("validation_issues") or []
+        summary_parts.append(f"当前记录中有 {len(issues) if isinstance(issues, list) else 0} 项校验问题")
+    return {
+        "summary": "；".join(summary_parts) + "。",
         "latest_outputs": latest,
     }
 

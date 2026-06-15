@@ -125,6 +125,63 @@ class AIService:
             raise AIServiceError(f"AI Planner JSON 无法解析，已截断预览：{preview}")
         return parsed
 
+    async def compose_agent_reply(
+        self,
+        *,
+        user_message: str,
+        run_summary: dict[str, Any],
+        business_cards: list[dict[str, Any]],
+        conversation: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not self.enabled:
+            raise AIServiceError("AI Agent 未启用：未配置 AI_API_KEY")
+
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是机械工艺分析 Agent 的回复组织器。你的任务是把工具结果写成用户能直接看懂的中文回复。"
+                        "不要暴露 JSON 字段名、工具名、内部事件名或调试信息。只返回严格 JSON。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "user_message": user_message,
+                            "conversation": conversation[-8:],
+                            "run_summary": run_summary,
+                            "business_cards": business_cards,
+                            "output_schema": {
+                                "assistant_message": "面向用户的自然语言回复，2~6 句，先说结论，再说已完成什么和下一步建议",
+                                "highlights": ["最多4条关键结论，短句"],
+                                "followup_questions": ["如果确实需要用户确认，列出最多3个问题"],
+                            },
+                            "rules": [
+                                "必须用中文。",
+                                "不要输出 Markdown 表格。",
+                                "不要说自己不能查看 JSON；你看到的是已经整理过的工具结果。",
+                                "有工序方案时，说明工序数量和主要风险，不要逐字重复所有工序。",
+                                "有校验问题时，用业务语言说明要复核什么。",
+                                "如果用户是追问上一轮结果，直接围绕上一轮结果回答。",
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+        }
+        result = await self._chat_completion(payload)
+        parsed = self._extract_json(result)
+        if not parsed:
+            preview = result.strip().replace("\n", " ")[:300]
+            raise AIServiceError(f"AI 回复组织 JSON 无法解析，已截断预览：{preview}")
+        return parsed
+
     def ocr_image_text(self, image_path: Path, *, prompt: str | None = None) -> str:
         """同步调用多模态模型提取图纸文字（供 OCR 链路复用 AI_API_KEY）。"""
         from pathlib import Path as _Path
