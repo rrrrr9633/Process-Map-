@@ -47,6 +47,82 @@ class AIService:
     def enabled(self) -> bool:
         return model_profile_service.active_profile().configured
 
+    async def plan_agent_next_action(
+        self,
+        *,
+        goal: str,
+        tool_specs: list[dict[str, Any]],
+        observations: list[dict[str, Any]],
+        max_permission: str,
+    ) -> dict[str, Any]:
+        if not self.enabled:
+            raise AIServiceError("AI Agent 未启用：未配置 AI_API_KEY")
+
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是受控工具调用 Planner。你只能从给定工具清单中选择工具。"
+                        "每次只输出一个严格 JSON 对象，不要输出 Markdown。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "goal": goal,
+                            "max_permission": max_permission,
+                            "tools": tool_specs,
+                            "observations": observations[-8:],
+                            "output_schema": {
+                                "intent": "用户意图分类，例如 drawing_analysis|process_generation|case_management|export|system_status|general_chat",
+                                "plan": [
+                                    {
+                                        "step_no": 1,
+                                        "title": "步骤名",
+                                        "purpose": "为什么需要这一步",
+                                        "tool_name": "可选，来自 tools[].name",
+                                        "status": "pending|running|done|skipped",
+                                    }
+                                ],
+                                "action": "tool|final",
+                                "tool_name": "当 action=tool 时必填，必须来自 tools[].name",
+                                "arguments": "dict，当 action=tool 时必填",
+                                "final_result": "dict，当 action=final 时必填",
+                                "stop_condition": "什么情况下本轮任务可以结束",
+                                "confidence": "0~1 数字，表示当前动作可靠性",
+                                "questions": ["如果信息不足，需要问用户的问题"],
+                                "reason": "简短说明为什么选择该动作",
+                            },
+                            "rules": [
+                                "先给出 plan，再给出本轮 next action。",
+                                "plan 必须是 1~6 步，不要过度规划。",
+                                "如果工具参数不完整，不要编造；优先使用 observations 中 perception.normalized_inputs 的 file_path/input_files。",
+                                "只能调用 tools 中列出的工具。",
+                                "不要请求超过 max_permission 的工具。",
+                                "如果信息不足以构造工具参数，输出 final，并在 final_result.questions 中说明缺什么。",
+                                "写入、导出、保存类工具如果没有人工确认，执行器会暂停；你仍可提出该工具调用，但 reason 必须说明需要确认。",
+                                "如果最近 observation 已经足以回答目标，输出 final。",
+                                "arguments 必须是合法 JSON object，不要把 JSON 字符串塞进 arguments。",
+                                "confidence 低于 0.5 时，除非是只读状态查询，否则优先 final 提问，不要贸然调用工具。",
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+        }
+        result = await self._chat_completion(payload)
+        parsed = self._extract_json(result)
+        if not parsed:
+            preview = result.strip().replace("\n", " ")[:300]
+            raise AIServiceError(f"AI Planner JSON 无法解析，已截断预览：{preview}")
+        return parsed
+
     def ocr_image_text(self, image_path: Path, *, prompt: str | None = None) -> str:
         """同步调用多模态模型提取图纸文字（供 OCR 链路复用 AI_API_KEY）。"""
         from pathlib import Path as _Path

@@ -23,11 +23,12 @@ let boundCaseSourceFiles = null;
 let boundCaseDisplayNames = [];
 let caseAnnotationPollTimer = null;
 let mermaidZoom = 1;
+let agentUploadedFiles = [];
+let agentConversation = [];
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
     mermaid.initialize({ startOnLoad: false, theme: 'default' });
-    checkExternalConditionsCheckbox();
     bindFileUploadPreview();
     bindModelProfileSwitcher();
     loadConfigStatus();
@@ -61,17 +62,6 @@ function toggleInputMethod() {
     document.getElementById('json-input-section').style.display = method === 'json' ? 'block' : 'none';
 }
 
-// 外部条件复选框
-function checkExternalConditionsCheckbox() {
-    const checkbox = document.getElementById('use-external-conditions');
-    const form = document.getElementById('external-conditions-form');
-    if (checkbox) {
-        checkbox.addEventListener('change', () => {
-            form.style.display = checkbox.checked ? 'block' : 'none';
-        });
-    }
-}
-
 // 文件上传预览
 function bindFileUploadPreview() {
     const fileInput = document.getElementById('file-input');
@@ -100,6 +90,180 @@ function bindFileUploadPreview() {
         }).join('');
         fileInfo.style.display = 'block';
     });
+}
+
+function toggleAgentMode() {
+    const enabled = Boolean(document.getElementById('use-agent-mode')?.checked);
+    const panel = document.getElementById('agent-chat-panel');
+    const button = document.getElementById('generate-process-btn');
+    if (panel) panel.style.display = enabled ? 'block' : 'none';
+    if (button) button.textContent = enabled ? '启动 Agent 分析' : '生成工序方案';
+}
+
+function appendAgentMessage(role, content) {
+    const messages = document.getElementById('agent-chat-messages');
+    if (!messages) return;
+    const node = document.createElement('div');
+    node.className = `agent-message agent-message-${role}`;
+    node.textContent = content;
+    messages.appendChild(node);
+    messages.scrollTop = messages.scrollHeight;
+}
+
+function clearAgentChat() {
+    agentUploadedFiles = [];
+    agentConversation = [];
+    const input = document.getElementById('agent-chat-input');
+    const fileInput = document.getElementById('agent-file-input');
+    const messages = document.getElementById('agent-chat-messages');
+    if (input) input.value = '';
+    if (fileInput) fileInput.value = '';
+    if (messages) {
+        messages.innerHTML = '<div class="agent-message agent-message-system">Agent 模式已开启。可以直接提问，也可以上传图纸文件让 Agent 自动选择工具分析。</div>';
+    }
+}
+
+async function uploadAgentFiles(files) {
+    if (!files.length) return [];
+    const formData = new FormData();
+    files.forEach(file => formData.append('files', file));
+    const response = await fetch(`${API_BASE}/agent/files`, {
+        method: 'POST',
+        body: formData,
+    });
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Agent 文件上传失败：HTTP ${response.status}: ${errorText}`);
+    }
+    const data = await response.json();
+    return data.files || [];
+}
+
+function summarizeAgentRun(run) {
+    if (!run) return 'Agent 没有返回运行结果。';
+    const actualRun = run.run || run;
+    if (run.assistant_message) {
+        return run.assistant_message;
+    }
+    const lines = [`状态：${actualRun.status || run.status || 'unknown'}`];
+    if (actualRun.final_result) {
+        lines.push(`最终结果：${JSON.stringify(actualRun.final_result, null, 2)}`);
+    }
+    const lastObservation = (actualRun.observations || []).slice(-1)[0];
+    if (lastObservation) {
+        lines.push(`最后工具：${lastObservation.tool_name}，${lastObservation.ok ? '成功' : '失败'}`);
+        if (lastObservation.error_message) lines.push(`错误：${lastObservation.error_message}`);
+    }
+    const lastEvent = (actualRun.events || []).slice(-1)[0];
+    if (lastEvent) lines.push(`事件：${lastEvent.message}`);
+    return lines.join('\n');
+}
+
+function renderAgentRunResult(run) {
+    const result = document.getElementById('generate-result');
+    if (!result) return;
+    const actualRun = run.run || run;
+    const cards = run.cards || [];
+    const actions = run.actions || [];
+    const cardHtml = cards.map(renderAgentCard).join('');
+    const actionHtml = actions.length
+        ? `<div class="agent-actions">${actions.map(action => `<button class="btn btn-sm" type="button" disabled>${escapeHtml(action.label || action.type)}</button>`).join('')}</div>`
+        : '';
+    result.innerHTML = `
+        <div class="result-section">
+            <h3>Agent 运行结果</h3>
+            <div class="agent-run-status">${escapeHtml(summarizeAgentRun(run))}</div>
+            ${actionHtml}
+            ${cardHtml}
+            <details class="technical-flow-details">
+                <summary>查看运行轨迹</summary>
+                <pre>${escapeHtml(JSON.stringify(actualRun, null, 2))}</pre>
+            </details>
+        </div>
+    `;
+    result.classList.add('active');
+}
+
+function renderAgentCard(card) {
+    if (card.kind === 'plan' && Array.isArray(card.items)) {
+        return `
+            <div class="agent-result-card">
+                <strong>${escapeHtml(card.title || 'Agent 计划')}</strong>
+                <div class="agent-plan-list">
+                    ${card.items.map(step => `
+                        <div class="agent-plan-step">
+                            <span>${escapeHtml(step.status || 'pending')}</span>
+                            <div>
+                                <strong>${escapeHtml(step.title || `步骤 ${step.step_no || ''}`)}</strong>
+                                <p>${escapeHtml(step.purpose || '')}</p>
+                                ${step.tool_name ? `<small>工具：${escapeHtml(step.tool_name)}</small>` : ''}
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }
+    return `
+        <div class="agent-result-card">
+            <strong>${escapeHtml(card.title || card.kind || '结果')}</strong>
+            <pre>${escapeHtml(JSON.stringify(card.content || card.items || card, null, 2))}</pre>
+        </div>
+    `;
+}
+
+async function runAgentConversation(message, files = []) {
+    const uploaded = await uploadAgentFiles(files);
+    agentUploadedFiles = agentUploadedFiles.concat(uploaded);
+    const inputFiles = agentUploadedFiles.map(file => file.file_path);
+    const goal = message || '请根据当前上下文和文件进行工艺分析，并给出下一步建议。';
+    const response = await fetch(`${API_BASE}/agent/runs/auto`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            goal,
+            user_message: message,
+            input_files: inputFiles,
+            max_permission: 'read_only',
+            max_steps: 5,
+            initial_context: {
+                conversation: agentConversation.slice(-8),
+                uploaded_files: agentUploadedFiles,
+                file_path: inputFiles[0] || '',
+            },
+        }),
+    });
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Agent 运行失败：HTTP ${response.status}: ${errorText}`);
+    }
+    return response.json();
+}
+
+async function sendAgentMessage() {
+    const input = document.getElementById('agent-chat-input');
+    const fileInput = document.getElementById('agent-file-input');
+    const message = (input?.value || '').trim();
+    const files = Array.from(fileInput?.files || []);
+    if (!message && !files.length) {
+        alert('请输入消息或选择文件');
+        return;
+    }
+    appendAgentMessage('user', [message, files.length ? `附件：${files.map(file => file.name).join('、')}` : ''].filter(Boolean).join('\n'));
+    agentConversation.push({ role: 'user', content: message, file_count: files.length });
+    if (input) input.value = '';
+    if (fileInput) fileInput.value = '';
+    try {
+        appendAgentMessage('system', 'Agent 正在感知输入、规划工具并执行...');
+        const run = await runAgentConversation(message, files);
+        const summary = summarizeAgentRun(run);
+        appendAgentMessage('assistant', summary);
+        agentConversation.push({ role: 'assistant', content: summary, run_id: run.run?.run_id || run.run_id, status: run.status || run.run?.status });
+        renderAgentRunResult(run);
+    } catch (error) {
+        appendAgentMessage('assistant', `失败：${error.message}`);
+        console.error(error);
+    }
 }
 
 function getFileSuffix(fileName) {
@@ -947,7 +1111,7 @@ function resetGenerateButton(loading, generateButton) {
     isGeneratingProcess = false;
     if (generateButton) {
         generateButton.disabled = false;
-        generateButton.textContent = '生成工序方案';
+        generateButton.textContent = document.getElementById('use-agent-mode')?.checked ? '启动 Agent 分析' : '生成工序方案';
         delete generateButton.dataset.generating;
     }
 }
@@ -966,7 +1130,7 @@ async function generateProcess() {
     const method = document.getElementById('input-method').value;
     const mode = document.getElementById('process-mode').value;
     const targetOperationCount = Math.max(1, Math.min(60, Number(document.getElementById('target-operation-count')?.value || 15)));
-    const useExternalConditions = document.getElementById('use-external-conditions').checked;
+    const useAgentMode = Boolean(document.getElementById('use-agent-mode')?.checked);
     
     const loading = document.getElementById('generate-loading');
     const result = document.getElementById('generate-result');
@@ -990,28 +1154,14 @@ async function generateProcess() {
     );
     if (generateButton) {
         generateButton.disabled = true;
-        generateButton.textContent = '生成中...';
+        generateButton.textContent = useAgentMode ? 'Agent 运行中...' : '生成中...';
     }
     
     let requestData = {
         mode,
         target_operation_count: targetOperationCount,
     };
-    
-    // 外部条件
-    if (useExternalConditions) {
-        try {
-            const externalConditionsText = document.getElementById('external-conditions-input').value.trim();
-            if (externalConditionsText) {
-                requestData.external_conditions = JSON.parse(externalConditionsText);
-            }
-        } catch (e) {
-            resetGenerateButton(loading, generateButton);
-            alert('外部条件 JSON 格式错误：' + e.message);
-            return;
-        }
-    }
-    
+
     let keepProgressVisible = false;
     try {
         currentData = null;
@@ -1019,6 +1169,51 @@ async function generateProcess() {
         lastJob = null;
         let response;
         let uploadInfo = null;
+
+        if (useAgentMode) {
+            const chatInput = document.getElementById('agent-chat-input');
+            const agentFileInput = document.getElementById('agent-file-input');
+            let message = (chatInput?.value || '').trim();
+            let files = Array.from(agentFileInput?.files || []);
+            if (!message && method === 'text') {
+                message = document.getElementById('text-input').value.trim();
+            }
+            if (!files.length && method === 'file') {
+                files = Array.from(document.getElementById('file-input')?.files || []);
+            }
+            if (!message && !files.length && boundCaseSourceFiles?.length) {
+                message = `请分析这些已绑定图纸：${boundCaseDisplayNames.join('、') || boundCaseSourceFiles.join('、')}`;
+                agentUploadedFiles = agentUploadedFiles.concat(
+                    boundCaseSourceFiles.map((storedName, index) => ({
+                        original_name: boundCaseDisplayNames[index] || storedName,
+                        stored_name: storedName,
+                        file_path: storedName,
+                        size: 0,
+                    }))
+                );
+            }
+            if (!message && !files.length && !agentUploadedFiles.length) {
+                resetGenerateButton(loading, generateButton);
+                alert('Agent 模式下请输入消息或选择文件');
+                return;
+            }
+            startGenerationProgressTimer(
+                'Agent 模式已启动',
+                '正在上传附件并让 Agent 自动选择工具。',
+                startedAt,
+                [],
+                'backend',
+            );
+            appendAgentMessage('user', [message, files.length ? `附件：${files.map(file => file.name).join('、')}` : ''].filter(Boolean).join('\n'));
+            agentConversation.push({ role: 'user', content: message, file_count: files.length });
+            const run = await runAgentConversation(message, files);
+            const summary = summarizeAgentRun(run);
+            appendAgentMessage('assistant', summary);
+            agentConversation.push({ role: 'assistant', content: summary, run_id: run.run?.run_id || run.run_id, status: run.status || run.run?.status });
+            renderAgentRunResult(run);
+            setGenerationProgress('Agent 运行完成', `状态：${run.status || run.run?.status || 'unknown'}`, startedAt, [], 'result');
+            return;
+        }
         
         if (method === 'text') {
             const text = document.getElementById('text-input').value.trim();
@@ -1208,7 +1403,7 @@ async function generateProcess() {
             isGeneratingProcess = false;
             if (generateButton) {
                 generateButton.disabled = false;
-                generateButton.textContent = '生成工序方案';
+                generateButton.textContent = document.getElementById('use-agent-mode')?.checked ? '启动 Agent 分析' : '生成工序方案';
                 delete generateButton.dataset.generating;
             }
         } else {
@@ -2274,10 +2469,10 @@ function clearForm() {
     const generateButton = document.getElementById('generate-process-btn');
     resetGenerateButton(loading, generateButton);
     clearBoundCaseSourceFiles();
+    clearAgentChat();
     document.getElementById('text-input').value = '';
     document.getElementById('json-input').value = '';
     document.getElementById('file-input').value = '';
-    document.getElementById('external-conditions-input').value = '';
     const fileInfo = document.getElementById('file-info');
     if (fileInfo) {
         fileInfo.style.display = 'none';

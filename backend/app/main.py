@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from app.api.agent import router as agent_router
 from app.api.cases import router as cases_router
 from app.api.process import router as process_router
 from app.config import settings
@@ -43,8 +44,10 @@ app.add_middleware(
 
 app.include_router(process_router)
 app.include_router(cases_router)
+app.include_router(agent_router)
 app.include_router(process_router, prefix="/api")
 app.include_router(cases_router, prefix="/api")
+app.include_router(agent_router, prefix="/api")
 
 
 @app.get("/health")

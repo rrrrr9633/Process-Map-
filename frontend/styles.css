@@ -275,12 +275,178 @@ input[type="file"]:focus {
     line-height: 1.2;
 }
 
-.form-col label,
-.external-conditions label {
+.form-col label {
     display: block;
     color: var(--text);
     font-weight: 500;
     margin-bottom: 8px;
+}
+
+.agent-mode-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 16px;
+    align-items: center;
+}
+
+.agent-mode-row p {
+    color: var(--text-muted);
+    font-size: 13px;
+    margin-top: 4px;
+}
+
+.agent-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 42px;
+    padding: 8px 12px;
+    border: 1px solid var(--border-strong);
+    background: var(--white);
+    cursor: pointer;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.agent-toggle input {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+}
+
+.agent-chat-panel {
+    margin-top: 16px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface-muted);
+}
+
+.agent-chat-messages {
+    display: grid;
+    gap: 10px;
+    max-height: 360px;
+    overflow: auto;
+    padding: 14px;
+    background: var(--white);
+    border-bottom: 1px solid var(--border-strong);
+}
+
+.agent-message {
+    max-width: 88%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 13px;
+}
+
+.agent-message-user {
+    justify-self: end;
+    background: var(--black);
+    color: var(--white);
+    border-color: var(--black);
+}
+
+.agent-message-assistant {
+    justify-self: start;
+}
+
+.agent-message-system {
+    max-width: 100%;
+    justify-self: stretch;
+    color: var(--text-muted);
+    background: var(--surface-muted);
+}
+
+.agent-chat-controls {
+    display: grid;
+    gap: 10px;
+    padding: 14px;
+}
+
+.agent-chat-controls textarea {
+    min-height: 86px;
+}
+
+.agent-chat-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.agent-run-status {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    padding: 12px;
+    border: 1px solid var(--border);
+    background: var(--surface-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+}
+
+.agent-result-card {
+    margin-top: 12px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    background: var(--white);
+}
+
+.agent-result-card strong {
+    display: block;
+    margin-bottom: 8px;
+}
+
+.agent-result-card pre,
+.technical-flow-details pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 360px;
+    overflow: auto;
+    padding: 10px;
+    background: var(--surface-muted);
+    border: 1px solid var(--border);
+    font-size: 12px;
+}
+
+.agent-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.agent-plan-list {
+    display: grid;
+    gap: 8px;
+}
+
+.agent-plan-step {
+    display: grid;
+    grid-template-columns: 86px minmax(0, 1fr);
+    gap: 10px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface-muted);
+}
+
+.agent-plan-step > span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 28px;
+    padding: 4px 8px;
+    border: 1px solid var(--border-strong);
+    background: var(--white);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.agent-plan-step p,
+.agent-plan-step small {
+    display: block;
+    color: var(--text-muted);
+    margin-top: 3px;
+    overflow-wrap: anywhere;
 }
 
 .btn {

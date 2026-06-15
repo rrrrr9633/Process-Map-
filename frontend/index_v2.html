@@ -58,13 +58,30 @@
                     <textarea id="json-input" placeholder='{"part": {...}, "features": [...]}'></textarea>
                 </div>
 
-                <!-- 外部条件 -->
+                <!-- Agent 模式 -->
                 <div class="section-card">
-                    <h3>外部条件（可选）</h3>
-                    <div class="external-conditions">
-                        <label><input type="checkbox" id="use-external-conditions"> 使用外部条件</label>
-                        <div id="external-conditions-form" style="display:none; margin-top:10px;">
-                            <textarea id="external-conditions-input" placeholder='{"production_constraints": {...}, "order_info": {...}}'></textarea>
+                    <h3>分析模式</h3>
+                    <div class="agent-mode-row">
+                        <div>
+                            <strong>固定分析</strong>
+                            <p>保留原有上传、解析、生成工序流程。</p>
+                        </div>
+                        <label class="agent-toggle">
+                            <input type="checkbox" id="use-agent-mode" onchange="toggleAgentMode()">
+                            <span>Agent 模式</span>
+                        </label>
+                    </div>
+                    <div id="agent-chat-panel" class="agent-chat-panel" style="display:none;">
+                        <div id="agent-chat-messages" class="agent-chat-messages">
+                            <div class="agent-message agent-message-system">Agent 模式已开启。可以直接提问，也可以上传图纸文件让 Agent 自动选择工具分析。</div>
+                        </div>
+                        <div class="agent-chat-controls">
+                            <textarea id="agent-chat-input" placeholder="例如：分析这份图纸，找出需要人工复核的关键尺寸，并给我下一步建议。"></textarea>
+                            <input type="file" id="agent-file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.dwg,.dxf,.stl,.obj,.ply,.step,.stp,.iges,.igs,.txt,.json" multiple>
+                            <div class="agent-chat-actions">
+                                <button class="btn btn-primary" type="button" onclick="sendAgentMessage()">发送给 Agent</button>
+                                <button class="btn btn-secondary" type="button" onclick="clearAgentChat()">清空对话</button>
+                            </div>
                         </div>
                     </div>
                 </div>

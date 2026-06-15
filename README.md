@@ -195,6 +195,13 @@ sudo systemctl reload nginx
 
 - `GET /api/health`
 - `GET /api/config/status`
+- `GET /api/agent/tools`：只读、可供模型直接调用的工具清单
+- `GET /api/agent/tools/catalog?max_permission=write`：按 category/permission 输出完整工具目录
+- `GET /api/agent/manifest`：agent 默认策略、工具分层和推荐开源集成清单
+- `POST /api/agent/files`：Agent 对话模式上传附件，返回可供 Agent 使用的服务器文件路径
+- `POST /api/agent/runs/readonly-tool`：兼容只读工具执行入口
+- `POST /api/agent/runs/tool`：受控工具执行入口，默认只读；生成/写入需要显式 `max_permission`
+- `POST /api/agent/runs/auto`：AI Planner 自动选择工具，按 `max_steps` 有限循环执行
 - `POST /api/process/generate-from-text`
 - `POST /api/process/generate-from-parse`
 - `POST /api/process/upload`
@@ -202,6 +209,55 @@ sudo systemctl reload nginx
 - `POST /api/process/jobs/upload-batch`
 
 后端本机仍保留无 `/api` 前缀的兼容接口，便于本地调试。
+
+### Agent 工具权限
+
+后端工具按权限分层：
+
+- `read_only`：解析、检索、校验、状态查询等只读工具，可作为模型默认工具。
+- `generate`：生成中间结果，例如标注归一化、规则工序、最终指导、工艺图计划、Markdown 文本。
+- `write`：会落盘或修改案例库的工具，例如保存案例、导出文件、渲染工艺图资产。
+
+`POST /api/agent/runs/tool` 的请求体示例：
+
+```json
+{
+  "goal": "导出标注",
+  "tool_name": "export_annotations",
+  "arguments": {
+    "explanations": [],
+    "export_dir": "/www/server/cutr/backend/generated/jobs/demo/exports"
+  },
+  "max_permission": "write",
+  "human_confirmed": true
+}
+```
+
+如果工具声明了 `requires_human_confirmation=true`，但请求里没有 `human_confirmed=true`，运行会停在 `waiting_human`，不会实际执行写入或落盘动作。
+
+### AI 自动选工具
+
+原有 `/api/process/...` 主链路仍是固定流程，适合图纸上传后的稳定生产路径。
+
+前端“生成工序”页默认使用固定分析。开启 Agent 模式后，会打开聊天面板，用户可以直接输入自然语言，也可以上传图纸文件和 Agent 交流。
+
+`POST /api/agent/runs/auto` 是新的 agent 入口：后端会先经过感知、记忆、规划、执行、反思、响应六个模块，再把工具清单、目标和上下文交给 AI Planner，让 AI 返回下一步 `tool` 或 `final`，最后由受控 executor 执行。该入口默认 `max_permission=read_only`，最多自动执行 `max_steps` 步。
+
+示例：
+
+```json
+{
+  "goal": "解析这个图纸并检查是否需要人工复核",
+  "input_files": ["/www/server/cutr/backend/uploads/demo.pdf"],
+  "max_permission": "read_only",
+  "max_steps": 3,
+  "initial_context": {
+    "file_path": "/www/server/cutr/backend/uploads/demo.pdf"
+  }
+}
+```
+
+如果要允许生成中间结果，把 `max_permission` 设为 `generate`。如果要允许写入工具，必须设为 `write`，且对应工具名必须出现在 `human_confirmed_tools` 中，否则运行会停在 `waiting_human`。
 
 ## 十二、注意事项
 
