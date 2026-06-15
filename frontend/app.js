@@ -238,14 +238,22 @@ async function restoreAgentSessionIfNeeded() {
     if (!response.ok) return;
     const data = await response.json();
     const session = data.session || {};
+    const jobs = Array.isArray(data.jobs) ? data.jobs : [];
     const sessionMessages = Array.isArray(session.messages) ? session.messages : [];
-    if (!sessionMessages.length) return;
+    if (!sessionMessages.length && !jobs.length) return;
     messages.innerHTML = '';
     for (const item of sessionMessages.slice(-12)) {
         if (item.payload && item.payload.run) {
             appendAgentResponse(item.payload);
         } else {
             appendAgentMessage(item.role || 'system', item.content || '');
+        }
+    }
+    for (const job of jobs.slice(0, 3).reverse()) {
+        if (job.status === 'completed' && job.payload && !sessionMessages.some(item => item.payload?.run?.run_id === job.payload?.run?.run_id)) {
+            appendAgentResponse(job.payload);
+        } else if (job.status !== 'completed') {
+            updateAgentPendingMessage(job);
         }
     }
     messages.dataset.restoredSessionId = agentSessionId;
@@ -574,13 +582,10 @@ async function runAgentConversation(message, files = []) {
     agentUploadedFiles = agentUploadedFiles.concat(uploaded);
     const inputFiles = agentUploadedFiles.map(file => file.file_path);
     const goal = message || '请根据当前上下文和文件进行工艺分析，并给出下一步建议。';
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 120000);
     try {
-        const response = await fetch(`${API_BASE}/agent/runs/auto`, {
+        const response = await fetch(`${API_BASE}/agent/runs/jobs`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            signal: controller.signal,
             body: JSON.stringify({
                 goal,
                 session_id: agentSessionId,
@@ -597,17 +602,49 @@ async function runAgentConversation(message, files = []) {
         });
         if (!response.ok) {
             const errorText = await response.text();
-            throw new Error(`Agent 运行失败：HTTP ${response.status}: ${errorText}`);
+            throw new Error(`Agent 任务创建失败：HTTP ${response.status}: ${errorText}`);
         }
-        return await response.json();
+        const job = await response.json();
+        return await pollAgentJob(job.job_id);
     } catch (error) {
-        if (error.name === 'AbortError') {
-            throw new Error('Agent 响应超时：后端还没有返回结果，请稍后重试或拆分问题。');
-        }
         throw error;
-    } finally {
-        clearTimeout(timeoutId);
     }
+}
+
+async function pollAgentJob(jobId) {
+    let attempts = 0;
+    while (attempts < 240) {
+        attempts += 1;
+        const response = await fetch(`${API_BASE}/agent/runs/jobs/${encodeURIComponent(jobId)}`);
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Agent 状态读取失败：HTTP ${response.status}: ${errorText}`);
+        }
+        const job = await response.json();
+        updateAgentPendingMessage(job);
+        if (job.status === 'completed') {
+            return job.payload;
+        }
+        if (job.status === 'failed') {
+            throw new Error(job.error || 'Agent 后台任务失败');
+        }
+        await new Promise(resolve => setTimeout(resolve, 1200));
+    }
+    throw new Error('Agent 后台任务仍未完成，请稍后查看会话或拆分问题。');
+}
+
+function updateAgentPendingMessage(job) {
+    const messages = document.getElementById('agent-chat-messages');
+    if (!messages || !job) return;
+    let node = messages.querySelector(`[data-agent-job-id="${job.job_id}"]`);
+    if (!node) {
+        node = document.createElement('div');
+        node.className = 'agent-message agent-message-system agent-job-message';
+        node.dataset.agentJobId = job.job_id;
+        messages.appendChild(node);
+    }
+    node.textContent = `${job.message || 'Agent 正在处理'}（${job.progress || 0}%）`;
+    messages.scrollTop = messages.scrollHeight;
 }
 
 async function sendAgentMessage() {
@@ -632,8 +669,8 @@ async function sendAgentMessage() {
     }
     try {
         appendAgentMessage('system', files.length
-            ? `已收到文件：${files.map(file => file.name).join('、')}。Agent 正在感知输入、自动调用工具，并整理成可读回复...`
-            : 'Agent 正在理解你的问题、自动选择工具，并整理成可读回复...'
+            ? `已收到文件：${files.map(file => file.name).join('、')}。Agent 后台任务启动后会持续更新进度。`
+            : 'Agent 后台任务启动后会持续更新进度。'
         );
         const run = await runAgentConversation(message, files);
         const summary = summarizeAgentRun(run);

@@ -5,9 +5,10 @@ from pathlib import Path
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile
 
 from app.agent_runtime.executor import controlled_agent_executor
+from app.agent_runtime.job import AgentJob, agent_job_store
 from app.agent_runtime.planner import agent_planner
 from app.agent_runtime.response import response_module
 from app.agent_runtime.session import agent_session_store
@@ -130,7 +131,10 @@ def create_agent_session() -> dict:
 @router.get("/sessions/{session_id}")
 def get_agent_session(session_id: str) -> dict:
     session = agent_session_store.get_or_create(session_id)
-    return {"session": agent_session_store.public_dict(session)}
+    return {
+        "session": agent_session_store.public_dict(session),
+        "jobs": [job.model_dump(mode="json") for job in agent_job_store.list_for_session(session.session_id)],
+    }
 
 
 @router.post("/files")
@@ -239,6 +243,69 @@ async def run_auto_agent(request: AutoAgentRunRequest) -> dict:
         return payload
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/runs/jobs", response_model=AgentJob)
+async def create_agent_run_job(request: AutoAgentRunRequest, background_tasks: BackgroundTasks) -> AgentJob:
+    init_agent_tools()
+    session = agent_session_store.get_or_create(request.session_id or None)
+    if request.user_message:
+        agent_session_store.append_message(session, role="user", content=request.user_message)
+    job = agent_job_store.create(session_id=session.session_id)
+    agent_job_store.update(
+        job.job_id,
+        status="running",
+        stage="queued",
+        message="Agent 已接收消息，正在进入后台处理",
+        progress=5,
+    )
+    background_tasks.add_task(_run_agent_job, job.job_id, request.model_dump(mode="json"), session.session_id)
+    return agent_job_store.get(job.job_id)
+
+
+@router.get("/runs/jobs/{job_id}", response_model=AgentJob)
+def get_agent_run_job(job_id: str) -> AgentJob:
+    try:
+        return agent_job_store.get(job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Agent 任务不存在") from exc
+
+
+async def _run_agent_job(job_id: str, raw_request: dict, session_id: str) -> None:
+    try:
+        request = AutoAgentRunRequest.model_validate(raw_request)
+        session = agent_session_store.get_or_create(session_id)
+        agent_job_store.update(job_id, stage="perception", message="Agent 正在读取会话和附件", progress=15)
+        session_files = [item.get("file_path") for item in session.uploaded_files if item.get("file_path")]
+        input_files = list(dict.fromkeys([*session_files, *request.input_files]))
+        context = {
+            **request.initial_context,
+            "session": agent_session_store.public_dict(session),
+            "last_run": session.last_run or {},
+            "recent_messages": [message.model_dump(mode="json") for message in session.messages[-12:]],
+        }
+        agent_job_store.update(job_id, stage="planning", message="Agent 正在规划并自动选择工具", progress=30)
+        run = await agent_planner.run(
+            goal=request.goal,
+            input_files=input_files,
+            user_message=request.user_message,
+            max_permission=request.max_permission,
+            max_steps=request.max_steps,
+            human_confirmed_tools=request.human_confirmed_tools,
+            initial_context=context,
+        )
+        agent_job_store.update(job_id, stage="response", message="Agent 正在整理成可读回复", progress=80)
+        payload = await response_module.to_chat_response(
+            run,
+            user_message=request.user_message,
+            conversation=[message.model_dump(mode="json") for message in session.messages[-12:]],
+        )
+        agent_session_store.append_message(session, role="assistant", content=payload["assistant_message"], payload=payload)
+        agent_session_store.set_last_run(session, payload)
+        payload["session"] = agent_session_store.public_dict(session)
+        agent_job_store.complete(job_id, payload)
+    except Exception as exc:
+        agent_job_store.fail(job_id, f"{type(exc).__name__}: {exc}")
 
 
 @router.post("/runs/confirm-tool")
