@@ -25,6 +25,7 @@ let caseAnnotationPollTimer = null;
 let mermaidZoom = 1;
 let agentUploadedFiles = [];
 let agentConversation = [];
+let lastAgentResponse = null;
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -100,6 +101,8 @@ function toggleAgentMode() {
     if (button) button.textContent = enabled ? '启动 Agent 分析' : '生成工序方案';
 }
 
+window.toggleAgentMode = toggleAgentMode;
+
 function appendAgentMessage(role, content) {
     const messages = document.getElementById('agent-chat-messages');
     if (!messages) return;
@@ -162,12 +165,13 @@ function summarizeAgentRun(run) {
 function renderAgentRunResult(run) {
     const result = document.getElementById('generate-result');
     if (!result) return;
+    lastAgentResponse = run;
     const actualRun = run.run || run;
     const cards = run.cards || [];
     const actions = run.actions || [];
     const cardHtml = cards.map(renderAgentCard).join('');
     const actionHtml = actions.length
-        ? `<div class="agent-actions">${actions.map(action => `<button class="btn btn-sm" type="button" disabled>${escapeHtml(action.label || action.type)}</button>`).join('')}</div>`
+        ? `<div class="agent-actions">${actions.map((action, index) => `<button class="btn btn-sm" type="button" onclick="handleAgentAction(${index})">${escapeHtml(action.label || action.type)}</button>`).join('')}</div>`
         : '';
     result.innerHTML = `
         <div class="result-section">
@@ -182,6 +186,67 @@ function renderAgentRunResult(run) {
         </div>
     `;
     result.classList.add('active');
+}
+
+async function handleAgentAction(index) {
+    const action = lastAgentResponse?.actions?.[index];
+    if (!action) return;
+    if (action.type === 'revise_request' || action.type === 'ask_followup' || action.type === 'retry') {
+        const input = document.getElementById('agent-chat-input');
+        if (input) {
+            input.focus();
+            input.placeholder = '补充你的需求后点击发送给 Agent';
+        }
+        return;
+    }
+    if (action.type === 'confirm_tool') {
+        const toolName = action.tool_name;
+        if (!toolName) {
+            alert('缺少需要确认的工具名');
+            return;
+        }
+        const confirmed = confirm(`确认继续执行工具：${toolName}？`);
+        if (!confirmed) return;
+        try {
+            appendAgentMessage('user', `确认继续执行：${toolName}`);
+            const response = await continueAgentWithConfirmation(toolName);
+            const summary = summarizeAgentRun(response);
+            appendAgentMessage('assistant', summary);
+            agentConversation.push({ role: 'assistant', content: summary, run_id: response.run?.run_id || response.run_id, status: response.status || response.run?.status });
+            renderAgentRunResult(response);
+        } catch (error) {
+            appendAgentMessage('assistant', `确认执行失败：${error.message}`);
+            console.error(error);
+        }
+    }
+}
+
+async function continueAgentWithConfirmation(toolName) {
+    const actualRun = lastAgentResponse?.run || lastAgentResponse || {};
+    const inputFiles = agentUploadedFiles.map(file => file.file_path);
+    const response = await fetch(`${API_BASE}/agent/runs/auto`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            goal: actualRun.goal || '继续执行已确认的 Agent 动作',
+            user_message: `用户已确认执行工具 ${toolName}`,
+            input_files: inputFiles.length ? inputFiles : (actualRun.input_files || []),
+            max_permission: 'write',
+            max_steps: 5,
+            human_confirmed_tools: [toolName],
+            initial_context: {
+                conversation: agentConversation.slice(-8),
+                previous_run: actualRun,
+                confirmed_tool: toolName,
+                uploaded_files: agentUploadedFiles,
+            },
+        }),
+    });
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Agent 确认执行失败：HTTP ${response.status}: ${errorText}`);
+    }
+    return response.json();
 }
 
 function renderAgentCard(card) {
@@ -2480,3 +2545,31 @@ function clearForm() {
     }
     document.getElementById('generate-result').classList.remove('active');
 }
+
+Object.assign(window, {
+    switchTab,
+    toggleInputMethod,
+    toggleAgentMode,
+    sendAgentMessage,
+    clearAgentChat,
+    handleAgentAction,
+    generateProcess,
+    clearForm,
+    loadCases,
+    setMermaidZoom,
+    resetMermaidZoom,
+    editCurrentPlan,
+    editOperation,
+    saveEditedPlan,
+    cancelEdit,
+    saveAsCase,
+    refreshCaseAnnotationSummary,
+    deleteCase,
+    saveCaseReview,
+    loadCase,
+    refreshCaseAnnotation,
+    startCaseAnnotation,
+    loadCaseForEdit,
+    loadCaseToAnalysis,
+    downloadMarkdown,
+});
