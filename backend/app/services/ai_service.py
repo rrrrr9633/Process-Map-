@@ -105,6 +105,8 @@ class AIService:
                                 "如果信息不足以构造工具参数，输出 final，并在 final_result.questions 中说明缺什么。",
                                 "写入、导出、保存类工具如果没有人工确认，执行器会暂停；你仍可提出该工具调用，但 reason 必须说明需要确认。",
                                 "如果最近 observation 已经足以回答目标，输出 final。",
+                                "如果还没有任何工具 observation，且用户提供了文件，必须优先调用 parse_drawing，不要只输出计划。",
+                                "如果已有 parse_drawing observation 且目标涉及工序，下一步优先调用 generate_rule_process_plan。",
                                 "arguments 必须是合法 JSON object，不要把 JSON 字符串塞进 arguments。",
                                 "confidence 低于 0.5 时，除非是只读状态查询，否则优先 final 提问，不要贸然调用工具。",
                             ],

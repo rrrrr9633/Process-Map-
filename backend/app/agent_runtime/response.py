@@ -16,7 +16,7 @@ class ResponseModule:
     def fallback_result(self, run: AgentRun) -> dict[str, Any]:
         return {
             "status": run.status.value,
-            "summary": "Agent 运行已停止，等待人工处理或下一轮用户输入。",
+            "summary": self._summarize_run_outputs(run) or "Agent 运行已停止，等待人工处理或下一轮用户输入。",
             "observations": [item.model_dump(mode="json") for item in run.observations[-3:]],
             "questions": run.questions[-8:],
             "risks": run.risks[-8:],
@@ -55,6 +55,9 @@ class ResponseModule:
                 summary = final_result.get("summary") or final_result.get("answer") or final_result.get("message")
                 if summary:
                     return str(summary)
+            output_summary = self._summarize_run_outputs(run)
+            if output_summary:
+                return output_summary
             return "已完成本轮 Agent 分析。"
         if run.status == AgentRunStatus.WAITING_HUMAN:
             pending_call = self._pending_call(run)
@@ -77,6 +80,9 @@ class ResponseModule:
         if run.observations:
             observation = run.observations[-1]
             if observation.ok:
+                output_summary = self._summarize_run_outputs(run)
+                if output_summary:
+                    return output_summary
                 return f"我已完成工具调用：{observation.tool_name}。结果已整理在下方详情中，你可以继续追问或让我进入下一步。"
             return f"工具 {observation.tool_name} 执行失败：{observation.error_message or '未返回可用结果'}"
         return "Agent 已接收任务，正在等待下一步。"
@@ -135,6 +141,49 @@ class ResponseModule:
                 }
             )
         return cards
+
+    def _summarize_run_outputs(self, run: AgentRun) -> str:
+        latest = self._latest_outputs(run)
+        parts: list[str] = []
+        parse_result = latest.get("parse_result") if isinstance(latest.get("parse_result"), dict) else {}
+        process_plan = latest.get("process_plan") if isinstance(latest.get("process_plan"), dict) else {}
+        validation_issues = latest.get("validation_issues")
+
+        if parse_result:
+            part = parse_result.get("part") if isinstance(parse_result.get("part"), dict) else {}
+            part_name = part.get("name") or part.get("part_name") or ""
+            risk_flags = parse_result.get("risk_flags") if isinstance(parse_result.get("risk_flags"), list) else []
+            if part_name:
+                parts.append(f"已解析图纸，识别零件：{part_name}。")
+            else:
+                parts.append("已完成图纸结构化解析。")
+            if risk_flags:
+                parts.append(f"解析结果包含 {len(risk_flags)} 项需要复核的风险。")
+
+        if process_plan:
+            operations = process_plan.get("operations") if isinstance(process_plan.get("operations"), list) else []
+            parts.append(f"已生成规则工序方案，共 {len(operations)} 道工序。")
+
+        if isinstance(validation_issues, list):
+            if validation_issues:
+                parts.append(f"工序校验发现 {len(validation_issues)} 项需要关注的问题。")
+            else:
+                parts.append("工序校验未发现明显规则问题。")
+
+        return "".join(parts)
+
+    def _latest_outputs(self, run: AgentRun) -> dict[str, Any]:
+        values: dict[str, Any] = {}
+        for observation in run.observations:
+            if not observation.ok:
+                continue
+            for key, value in (observation.output or {}).items():
+                values[key] = value
+        if run.final_result:
+            latest_outputs = run.final_result.get("latest_outputs")
+            if isinstance(latest_outputs, dict):
+                values.update(latest_outputs)
+        return values
 
 
 response_module = ResponseModule()

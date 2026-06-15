@@ -305,12 +305,56 @@ function renderAgentCard(card) {
             </div>
         `;
     }
+    if (card.kind === 'last_tool') {
+        const content = card.content || {};
+        const summary = summarizeAgentToolOutput(content);
+        return `
+            <div class="agent-result-card">
+                <strong>${escapeHtml(card.title || '工具结果')}</strong>
+                <p>${escapeHtml(card.ok ? summary : '工具执行失败，请查看运行轨迹。')}</p>
+            </div>
+        `;
+    }
+    if (card.kind === 'final_result') {
+        const content = card.content || {};
+        const summary = content.summary || summarizeAgentToolOutput(content.latest_outputs || content);
+        return `
+            <div class="agent-result-card">
+                <strong>${escapeHtml(card.title || 'Agent 结果')}</strong>
+                <p>${escapeHtml(summary || '本轮 Agent 已完成。')}</p>
+            </div>
+        `;
+    }
     return `
         <div class="agent-result-card">
             <strong>${escapeHtml(card.title || card.kind || '结果')}</strong>
             <pre>${escapeHtml(JSON.stringify(card.content || card.items || card, null, 2))}</pre>
         </div>
     `;
+}
+
+function summarizeAgentToolOutput(output) {
+    if (!output || typeof output !== 'object') return '';
+    const parts = [];
+    const parseResult = output.parse_result || {};
+    const processPlan = output.process_plan || {};
+    const validationIssues = Array.isArray(output.validation_issues) ? output.validation_issues : null;
+    if (parseResult && Object.keys(parseResult).length) {
+        const part = parseResult.part || {};
+        const risks = Array.isArray(parseResult.risk_flags) ? parseResult.risk_flags : [];
+        parts.push(part.name || part.part_name ? `图纸已解析，零件：${part.name || part.part_name}` : '图纸已解析');
+        if (risks.length) parts.push(`风险 ${risks.length} 项`);
+    }
+    if (processPlan && Object.keys(processPlan).length) {
+        const operations = Array.isArray(processPlan.operations) ? processPlan.operations : [];
+        parts.push(`工序方案 ${operations.length} 道`);
+    }
+    if (validationIssues) {
+        parts.push(validationIssues.length ? `校验问题 ${validationIssues.length} 项` : '校验未发现明显问题');
+    }
+    if (Array.isArray(output.pages)) parts.push(`渲染页面 ${output.pages.length} 页`);
+    if (output.geometry?.summary) parts.push(output.geometry.summary);
+    return parts.join('；') || '工具已返回结果。';
 }
 
 async function runAgentConversation(message, files = []) {

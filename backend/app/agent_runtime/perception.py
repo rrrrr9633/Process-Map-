@@ -81,7 +81,7 @@ class PerceptionModule:
             return "case_management"
         if any(keyword in text for keyword in ("导出", "下载", "csv", "markdown", "工艺图")):
             return "export"
-        if any(keyword in text for keyword in ("生成工序", "工序", "流程", "process")):
+        if any(keyword in text for keyword in ("生成工序", "工序", "流程", "工艺", "加工", "制造", "process")):
             return "process_generation"
         if any(keyword in text for keyword in ("解析", "图纸", "标注", "尺寸", "复核", "风险")) or files:
             return "drawing_analysis"

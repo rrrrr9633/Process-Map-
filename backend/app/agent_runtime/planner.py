@@ -93,6 +93,16 @@ class AgentPlanner:
                 )
                 return run
 
+            available_tool_names = {spec["name"] for spec in tool_specs if "name" in spec}
+            fallback = None
+            if decision.action != "tool" or self._is_repeated_successful_tool(run, decision.tool_name):
+                fallback = self.planning.fallback_decision(
+                    memory=memory.model_dump(mode="json"),
+                    available_tool_names=available_tool_names,
+                )
+                if fallback:
+                    decision = fallback
+
             run.record_event(
                 AgentRunEventType.PLAN_CREATED,
                 f"AI Planner 生成第 {step_index} 步动作",
@@ -172,6 +182,11 @@ class AgentPlanner:
             if step.get("tool_name") == tool_name and step.get("status") in {None, "", "pending", "running"}:
                 step["status"] = status
                 return
+
+    def _is_repeated_successful_tool(self, run: AgentRun, tool_name: str) -> bool:
+        if not tool_name:
+            return False
+        return any(observation.tool_name == tool_name and observation.ok for observation in run.observations)
 
 
 agent_planner = AgentPlanner()

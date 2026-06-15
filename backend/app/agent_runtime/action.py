@@ -62,6 +62,14 @@ class ActionModule:
             }:
                 prepared["file_path"] = file_path
 
+        latest_outputs = self._latest_outputs(run)
+        if tool_name in {"generate_rule_process_plan", "validate_process_plan", "build_process_guidance"}:
+            prepared.setdefault("parse_result", latest_outputs.get("parse_result"))
+        if tool_name in {"validate_process_plan", "build_process_guidance"}:
+            prepared.setdefault("process_plan", latest_outputs.get("process_plan"))
+        if tool_name == "build_process_guidance":
+            prepared.setdefault("annotation_result", latest_outputs.get("annotation_result") or {})
+
         if "target_dir" not in prepared and tool_name in {"render_drawing_pages", "render_cad_preview"}:
             prepared["target_dir"] = self._default_target_dir(run, "agent_pages")
         if "target_dir" not in prepared and tool_name == "render_process_drawing_assets":
@@ -73,6 +81,22 @@ class ActionModule:
     def _default_target_dir(self, run: AgentRun, leaf: str) -> str:
         base = Path("generated") / "agent_runs" / run.run_id / leaf
         return str(base)
+
+    def _latest_outputs(self, run: AgentRun) -> dict[str, Any]:
+        values: dict[str, Any] = {}
+        for observation in run.observations:
+            if not observation.ok:
+                continue
+            output = observation.output or {}
+            if "parse_result" in output:
+                values["parse_result"] = output["parse_result"]
+            if "process_plan" in output:
+                values["process_plan"] = output["process_plan"]
+            if "flow" in output:
+                values["flow"] = output["flow"]
+            if "annotation_result" in output:
+                values["annotation_result"] = output["annotation_result"]
+        return values
 
 
 action_module = ActionModule()
