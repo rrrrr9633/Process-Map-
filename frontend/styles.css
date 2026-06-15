@@ -374,6 +374,81 @@ input[type="file"]:focus {
     gap: 10px;
 }
 
+.agent-history-panel {
+    border-top: 1px solid var(--border-strong);
+    background: var(--white);
+    padding: 14px;
+}
+
+.agent-history-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.agent-history-list {
+    display: grid;
+    gap: 8px;
+    max-height: 360px;
+    overflow: auto;
+}
+
+.agent-history-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: stretch;
+    border: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.agent-history-item.active {
+    border-color: var(--border-strong);
+}
+
+.agent-history-main {
+    display: grid;
+    gap: 3px;
+    width: 100%;
+    padding: 10px 12px;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+}
+
+.agent-history-main strong,
+.agent-history-main span,
+.agent-history-main p {
+    overflow-wrap: anywhere;
+}
+
+.agent-history-main span {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.agent-history-main p {
+    color: var(--text-muted);
+    font-size: 13px;
+    margin: 0;
+}
+
+.agent-history-delete {
+    align-self: center;
+    margin: 8px;
+}
+
+.agent-history-empty {
+    padding: 12px;
+    border: 1px solid var(--border);
+    background: var(--surface-muted);
+    color: var(--text-muted);
+}
+
 .agent-run-status {
     white-space: pre-wrap;
     overflow-wrap: anywhere;

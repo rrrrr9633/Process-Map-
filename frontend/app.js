@@ -190,7 +190,107 @@ async function startNewAgentSession() {
     clearAgentChat();
     await ensureAgentSession();
     appendAgentMessage('system', `已创建新 Agent 会话：${agentSessionId}`);
+    loadAgentHistory().catch(error => console.error(error));
 }
+
+async function toggleAgentHistory() {
+    const panel = document.getElementById('agent-history-panel');
+    if (!panel) return;
+    const visible = panel.style.display !== 'none';
+    panel.style.display = visible ? 'none' : 'block';
+    if (!visible) {
+        await loadAgentHistory();
+    }
+}
+
+async function loadAgentHistory() {
+    const list = document.getElementById('agent-history-list');
+    if (!list) return;
+    list.innerHTML = '<div class="agent-history-empty">正在加载历史对话...</div>';
+    try {
+        const response = await fetch(`${API_BASE}/agent/sessions?limit=80`);
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`HTTP ${response.status}: ${errorText}`);
+        }
+        const data = await response.json();
+        const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+        if (!sessions.length) {
+            list.innerHTML = '<div class="agent-history-empty">暂无历史对话</div>';
+            return;
+        }
+        list.innerHTML = sessions.map(renderAgentHistoryItem).join('');
+    } catch (error) {
+        list.innerHTML = `<div class="agent-history-empty">历史对话加载失败：${escapeHtml(error.message)}</div>`;
+    }
+}
+
+function renderAgentHistoryItem(session) {
+    const isActive = session.session_id === agentSessionId;
+    const title = session.title || 'Agent 会话';
+    const updated = formatAgentHistoryTime(session.updated_at);
+    const meta = [
+        `${session.message_count || 0} 条消息`,
+        `${session.file_count || 0} 个文件`,
+        updated,
+    ].filter(Boolean).join(' · ');
+    return `
+        <div class="agent-history-item ${isActive ? 'active' : ''}">
+            <button class="agent-history-main" type="button" onclick="openAgentHistorySession('${escapeJsString(session.session_id)}')">
+                <strong>${escapeHtml(title)}</strong>
+                <span>${escapeHtml(meta)}</span>
+                <p>${escapeHtml(session.last_message || '无消息内容')}</p>
+            </button>
+            <button class="btn btn-sm agent-history-delete" type="button" onclick="deleteAgentHistorySession('${escapeJsString(session.session_id)}')">删除</button>
+        </div>
+    `;
+}
+
+async function openAgentHistorySession(sessionId) {
+    if (!sessionId) return;
+    agentSessionId = sessionId;
+    window.localStorage.setItem('cutr_agent_session_id', agentSessionId);
+    const messages = document.getElementById('agent-chat-messages');
+    if (messages) {
+        delete messages.dataset.restoredSessionId;
+        messages.innerHTML = '<div class="agent-message agent-message-system">正在恢复历史对话...</div>';
+    }
+    agentUploadedFiles = [];
+    agentConversation = [];
+    lastAgentResponse = null;
+    await restoreAgentSessionIfNeeded();
+    await loadAgentHistory();
+    document.getElementById('agent-chat-input')?.focus();
+}
+
+async function deleteAgentHistorySession(sessionId) {
+    if (!sessionId) return;
+    if (!confirm('确认删除这条 Agent 历史对话？')) return;
+    const response = await fetch(`${API_BASE}/agent/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+    if (!response.ok) {
+        const errorText = await response.text();
+        alert(`删除失败：HTTP ${response.status}: ${errorText}`);
+        return;
+    }
+    if (sessionId === agentSessionId) {
+        agentSessionId = '';
+        window.localStorage.removeItem('cutr_agent_session_id');
+        clearAgentChat();
+    }
+    await loadAgentHistory();
+}
+
+function formatAgentHistoryTime(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString('zh-CN', { hour12: false });
+}
+
+window.toggleAgentHistory = toggleAgentHistory;
+window.loadAgentHistory = loadAgentHistory;
+window.openAgentHistorySession = openAgentHistorySession;
+window.deleteAgentHistorySession = deleteAgentHistorySession;
 
 async function uploadAgentFiles(files) {
     if (!files.length) return [];
@@ -241,6 +341,11 @@ async function restoreAgentSessionIfNeeded() {
     const jobs = Array.isArray(data.jobs) ? data.jobs : [];
     const sessionMessages = Array.isArray(session.messages) ? session.messages : [];
     if (!sessionMessages.length && !jobs.length) return;
+    agentUploadedFiles = Array.isArray(session.uploaded_files) ? session.uploaded_files : [];
+    agentConversation = sessionMessages.map(item => ({
+        role: item.role || 'system',
+        content: item.content || '',
+    })).slice(-12);
     messages.innerHTML = '';
     for (const item of sessionMessages.slice(-12)) {
         if (item.payload && item.payload.run) {

@@ -128,6 +128,12 @@ def create_agent_session() -> dict:
     return {"session": agent_session_store.public_dict(session)}
 
 
+@router.get("/sessions")
+def list_agent_sessions(limit: int = Query(default=50, ge=1, le=200)) -> dict:
+    sessions = agent_session_store.list_sessions(limit=limit)
+    return {"sessions": [agent_session_store.summary_dict(session) for session in sessions]}
+
+
 @router.get("/sessions/{session_id}")
 def get_agent_session(session_id: str) -> dict:
     session = agent_session_store.get_or_create(session_id)
@@ -135,6 +141,12 @@ def get_agent_session(session_id: str) -> dict:
         "session": agent_session_store.public_dict(session),
         "jobs": [job.model_dump(mode="json") for job in agent_job_store.list_for_session(session.session_id)],
     }
+
+
+@router.delete("/sessions/{session_id}")
+def delete_agent_session(session_id: str) -> dict:
+    deleted = agent_session_store.delete_session(session_id)
+    return {"deleted": deleted, "session_id": session_id}
 
 
 @router.post("/files")

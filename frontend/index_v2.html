@@ -80,9 +80,17 @@
                             <input type="file" id="agent-file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.dwg,.dxf,.stl,.obj,.ply,.step,.stp,.iges,.igs,.txt,.json" multiple>
                             <div class="agent-chat-actions">
                                 <button class="btn btn-primary" id="agent-send-btn" type="button" onclick="sendAgentMessage()">发送给 Agent</button>
+                                <button class="btn btn-secondary" type="button" onclick="toggleAgentHistory()">历史对话</button>
                                 <button class="btn btn-secondary" type="button" onclick="startNewAgentSession()">新建会话</button>
                                 <button class="btn btn-secondary" type="button" onclick="clearAgentChat()">清空对话</button>
                             </div>
+                        </div>
+                        <div id="agent-history-panel" class="agent-history-panel" style="display:none;">
+                            <div class="agent-history-head">
+                                <strong>历史对话</strong>
+                                <button class="btn btn-sm" type="button" onclick="loadAgentHistory()">刷新</button>
+                            </div>
+                            <div id="agent-history-list" class="agent-history-list"></div>
                         </div>
                     </div>
                 </div>
@@ -179,6 +187,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=20260615-agent-16"></script>
+    <script src="app.js?v=20260615-agent-17"></script>
 </body>
 </html>
