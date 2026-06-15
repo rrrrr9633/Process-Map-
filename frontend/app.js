@@ -327,7 +327,7 @@ async function runAgentConversation(message, files = []) {
             session_id: agentSessionId,
             user_message: message,
             input_files: inputFiles,
-            max_permission: 'read_only',
+            max_permission: 'generate',
             max_steps: 5,
             initial_context: {
                 conversation: agentConversation.slice(-8),

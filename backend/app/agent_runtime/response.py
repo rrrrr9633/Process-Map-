@@ -61,6 +61,13 @@ class ResponseModule:
             tool_name = pending_call.get("tool_name") or run.current_step or "下一步工具"
             if pending_call:
                 return f"我已经规划好下一步，需要你确认后执行工具：{tool_name}。确认后我会继续处理。"
+            if run.observations:
+                observation = run.observations[-1]
+                if observation.requires_human_review:
+                    return (
+                        f"我已完成工具调用：{observation.tool_name}。结果包含需要人工复核的风险项，"
+                        "请查看下方详情；你可以补充要求让我继续分析，或切换到固定分析流程。"
+                    )
             if run.questions:
                 return "我还需要你补充信息：" + "；".join(run.questions[-3:])
             return "当前结果需要人工确认后继续。"
@@ -76,8 +83,13 @@ class ResponseModule:
 
     def _next_actions(self, run: AgentRun) -> list[dict[str, Any]]:
         if run.status == AgentRunStatus.WAITING_HUMAN:
-            tool_name = run.current_step or ""
             pending_call = self._pending_call(run)
+            if not pending_call:
+                return [
+                    {"type": "ask_followup", "label": "继续追问"},
+                    {"type": "revise_request", "label": "补充需求"},
+                ]
+            tool_name = pending_call.get("tool_name") or run.current_step or ""
             return [
                 {
                     "type": "confirm_tool",

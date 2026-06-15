@@ -16,7 +16,7 @@ class ReflectionModule:
         if run.status == AgentRunStatus.FAILED:
             return ReflectionResult(should_continue=False, requires_human=True, issues=["工具执行失败"])
         if run.status == AgentRunStatus.WAITING_HUMAN:
-            return ReflectionResult(should_continue=False, requires_human=True, issues=["需要人工确认或复核"])
+            return ReflectionResult(should_continue=False, requires_human=True, issues=["需要人工确认"])
         if run.observations and not run.observations[-1].ok:
             return ReflectionResult(
                 should_continue=False,

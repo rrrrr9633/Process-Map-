@@ -78,5 +78,9 @@ class AgentRun(BaseModel):
             {"call": call.model_dump(mode="json"), "observation": observation.model_dump(mode="json")},
         )
         if observation.requires_human_review:
-            self.status = AgentRunStatus.WAITING_HUMAN
-            self.record_event(AgentRunEventType.HUMAN_REVIEW_REQUIRED, f"工具 {call.tool_name} 结果需要人工复核")
+            self.risks.append(f"工具 {call.tool_name} 的结果需要人工复核")
+            self.record_event(
+                AgentRunEventType.OBSERVATION_RECORDED,
+                f"工具 {call.tool_name} 结果包含需复核内容",
+                {"requires_human_review": True},
+            )
