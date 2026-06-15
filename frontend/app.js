@@ -574,34 +574,47 @@ async function runAgentConversation(message, files = []) {
     agentUploadedFiles = agentUploadedFiles.concat(uploaded);
     const inputFiles = agentUploadedFiles.map(file => file.file_path);
     const goal = message || '请根据当前上下文和文件进行工艺分析，并给出下一步建议。';
-    const response = await fetch(`${API_BASE}/agent/runs/auto`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            goal,
-            session_id: agentSessionId,
-            user_message: message,
-            input_files: inputFiles,
-            max_permission: 'generate',
-            max_steps: 5,
-            initial_context: {
-                conversation: agentConversation.slice(-8),
-                uploaded_files: agentUploadedFiles,
-                file_path: inputFiles[0] || '',
-            },
-        }),
-    });
-    if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Agent 运行失败：HTTP ${response.status}: ${errorText}`);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000);
+    try {
+        const response = await fetch(`${API_BASE}/agent/runs/auto`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body: JSON.stringify({
+                goal,
+                session_id: agentSessionId,
+                user_message: message,
+                input_files: inputFiles,
+                max_permission: 'generate',
+                max_steps: 5,
+                initial_context: {
+                    conversation: agentConversation.slice(-8),
+                    uploaded_files: agentUploadedFiles,
+                    file_path: inputFiles[0] || '',
+                },
+            }),
+        });
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Agent 运行失败：HTTP ${response.status}: ${errorText}`);
+        }
+        return await response.json();
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            throw new Error('Agent 响应超时：后端还没有返回结果，请稍后重试或拆分问题。');
+        }
+        throw error;
+    } finally {
+        clearTimeout(timeoutId);
     }
-    return response.json();
 }
 
 async function sendAgentMessage() {
     if (isAgentSending) return;
     const input = document.getElementById('agent-chat-input');
     const fileInput = document.getElementById('agent-file-input');
+    const sendButton = document.getElementById('agent-send-btn');
     const message = (input?.value || '').trim();
     const files = Array.from(fileInput?.files || []);
     if (!message && !files.length) {
