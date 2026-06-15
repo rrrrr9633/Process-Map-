@@ -582,33 +582,48 @@ async function runAgentConversation(message, files = []) {
     agentUploadedFiles = agentUploadedFiles.concat(uploaded);
     const inputFiles = agentUploadedFiles.map(file => file.file_path);
     const goal = message || '请根据当前上下文和文件进行工艺分析，并给出下一步建议。';
-    try {
-        const response = await fetch(`${API_BASE}/agent/runs/jobs`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                goal,
-                session_id: agentSessionId,
-                user_message: message,
-                input_files: inputFiles,
-                max_permission: 'generate',
-                max_steps: 5,
-                initial_context: {
-                    conversation: agentConversation.slice(-8),
-                    uploaded_files: agentUploadedFiles,
-                    file_path: inputFiles[0] || '',
-                },
-            }),
-        });
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Agent 任务创建失败：HTTP ${response.status}: ${errorText}`);
-        }
+    const requestBody = {
+        goal,
+        session_id: agentSessionId,
+        user_message: message,
+        input_files: inputFiles,
+        max_permission: 'generate',
+        max_steps: 5,
+        initial_context: {
+            conversation: agentConversation.slice(-8),
+            uploaded_files: agentUploadedFiles,
+            file_path: inputFiles[0] || '',
+        },
+    };
+    const response = await fetch(`${API_BASE}/agent/runs/jobs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+    });
+    if (response.ok) {
         const job = await response.json();
         return await pollAgentJob(job.job_id);
-    } catch (error) {
-        throw error;
     }
+
+    const errorText = await response.text();
+    if (response.status === 404 || response.status === 405) {
+        appendAgentMessage('system', '当前后端还没有启用 Agent 后台任务接口，已自动切换到兼容通道处理。');
+        return await runAgentConversationAutoFallback(requestBody);
+    }
+    throw new Error(`Agent 任务创建失败：HTTP ${response.status}: ${errorText}`);
+}
+
+async function runAgentConversationAutoFallback(requestBody) {
+    const response = await fetch(`${API_BASE}/agent/runs/auto`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+    });
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Agent 兼容通道也失败：HTTP ${response.status}: ${errorText}`);
+    }
+    return await response.json();
 }
 
 async function pollAgentJob(jobId) {
