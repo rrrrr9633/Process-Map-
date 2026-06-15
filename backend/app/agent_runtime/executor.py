@@ -42,6 +42,10 @@ class ControlledAgentExecutor:
                     "tool_permission": definition.spec.permission.value,
                     "max_permission": max_permission.value,
                     "requires_human_confirmation": True,
+                    "pending_call": {
+                        "tool_name": tool_name,
+                        "arguments": arguments,
+                    },
                 },
             )
             return run

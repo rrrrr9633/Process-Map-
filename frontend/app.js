@@ -26,6 +26,7 @@ let mermaidZoom = 1;
 let agentUploadedFiles = [];
 let agentConversation = [];
 let lastAgentResponse = null;
+let agentSessionId = window.localStorage.getItem('cutr_agent_session_id') || '';
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -111,6 +112,7 @@ function appendAgentMessage(role, content) {
     node.textContent = content;
     messages.appendChild(node);
     messages.scrollTop = messages.scrollHeight;
+    return node;
 }
 
 function clearAgentChat() {
@@ -126,11 +128,21 @@ function clearAgentChat() {
     }
 }
 
+async function startNewAgentSession() {
+    agentSessionId = '';
+    window.localStorage.removeItem('cutr_agent_session_id');
+    lastAgentResponse = null;
+    clearAgentChat();
+    await ensureAgentSession();
+    appendAgentMessage('system', `已创建新 Agent 会话：${agentSessionId}`);
+}
+
 async function uploadAgentFiles(files) {
     if (!files.length) return [];
+    await ensureAgentSession();
     const formData = new FormData();
     files.forEach(file => formData.append('files', file));
-    const response = await fetch(`${API_BASE}/agent/files`, {
+    const response = await fetch(`${API_BASE}/agent/files?session_id=${encodeURIComponent(agentSessionId)}`, {
         method: 'POST',
         body: formData,
     });
@@ -140,6 +152,21 @@ async function uploadAgentFiles(files) {
     }
     const data = await response.json();
     return data.files || [];
+}
+
+async function ensureAgentSession() {
+    if (agentSessionId) return agentSessionId;
+    const response = await fetch(`${API_BASE}/agent/sessions`, { method: 'POST' });
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Agent 会话创建失败：HTTP ${response.status}: ${errorText}`);
+    }
+    const data = await response.json();
+    agentSessionId = data.session?.session_id || '';
+    if (agentSessionId) {
+        window.localStorage.setItem('cutr_agent_session_id', agentSessionId);
+    }
+    return agentSessionId;
 }
 
 function summarizeAgentRun(run) {
@@ -170,22 +197,35 @@ function renderAgentRunResult(run) {
     const cards = run.cards || [];
     const actions = run.actions || [];
     const cardHtml = cards.map(renderAgentCard).join('');
-    const actionHtml = actions.length
-        ? `<div class="agent-actions">${actions.map((action, index) => `<button class="btn btn-sm" type="button" onclick="handleAgentAction(${index})">${escapeHtml(action.label || action.type)}</button>`).join('')}</div>`
-        : '';
+    const actionHtml = renderAgentActions(actions);
     result.innerHTML = `
         <div class="result-section">
-            <h3>Agent 运行结果</h3>
+            <h3>Agent 状态</h3>
             <div class="agent-run-status">${escapeHtml(summarizeAgentRun(run))}</div>
             ${actionHtml}
-            ${cardHtml}
             <details class="technical-flow-details">
-                <summary>查看运行轨迹</summary>
+                <summary>查看计划和运行轨迹</summary>
+                ${cardHtml}
                 <pre>${escapeHtml(JSON.stringify(actualRun, null, 2))}</pre>
             </details>
         </div>
     `;
     result.classList.add('active');
+}
+
+function renderAgentActions(actions) {
+    if (!actions.length) return '';
+    return `<div class="agent-actions">${actions.map((action, index) => `<button class="btn btn-sm" type="button" onclick="handleAgentAction(${index})">${escapeHtml(action.label || action.type)}</button>`).join('')}</div>`;
+}
+
+function appendAgentActions(actions) {
+    const messages = document.getElementById('agent-chat-messages');
+    if (!messages || !actions?.length) return;
+    const node = document.createElement('div');
+    node.className = 'agent-message agent-message-system agent-action-message';
+    node.innerHTML = renderAgentActions(actions);
+    messages.appendChild(node);
+    messages.scrollTop = messages.scrollHeight;
 }
 
 async function handleAgentAction(index) {
@@ -212,6 +252,7 @@ async function handleAgentAction(index) {
             const response = await continueAgentWithConfirmation(toolName);
             const summary = summarizeAgentRun(response);
             appendAgentMessage('assistant', summary);
+            appendAgentActions(response.actions || []);
             agentConversation.push({ role: 'assistant', content: summary, run_id: response.run?.run_id || response.run_id, status: response.status || response.run?.status });
             renderAgentRunResult(response);
         } catch (error) {
@@ -224,22 +265,17 @@ async function handleAgentAction(index) {
 async function continueAgentWithConfirmation(toolName) {
     const actualRun = lastAgentResponse?.run || lastAgentResponse || {};
     const inputFiles = agentUploadedFiles.map(file => file.file_path);
-    const response = await fetch(`${API_BASE}/agent/runs/auto`, {
+    const action = (lastAgentResponse?.actions || []).find(item => item.type === 'confirm_tool' && item.tool_name === toolName) || {};
+    const response = await fetch(`${API_BASE}/agent/runs/confirm-tool`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             goal: actualRun.goal || '继续执行已确认的 Agent 动作',
-            user_message: `用户已确认执行工具 ${toolName}`,
+            session_id: agentSessionId,
+            tool_name: toolName,
+            arguments: action.arguments || {},
             input_files: inputFiles.length ? inputFiles : (actualRun.input_files || []),
             max_permission: 'write',
-            max_steps: 5,
-            human_confirmed_tools: [toolName],
-            initial_context: {
-                conversation: agentConversation.slice(-8),
-                previous_run: actualRun,
-                confirmed_tool: toolName,
-                uploaded_files: agentUploadedFiles,
-            },
         }),
     });
     if (!response.ok) {
@@ -278,6 +314,7 @@ function renderAgentCard(card) {
 }
 
 async function runAgentConversation(message, files = []) {
+    await ensureAgentSession();
     const uploaded = await uploadAgentFiles(files);
     agentUploadedFiles = agentUploadedFiles.concat(uploaded);
     const inputFiles = agentUploadedFiles.map(file => file.file_path);
@@ -287,6 +324,7 @@ async function runAgentConversation(message, files = []) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             goal,
+            session_id: agentSessionId,
             user_message: message,
             input_files: inputFiles,
             max_permission: 'read_only',
@@ -323,6 +361,7 @@ async function sendAgentMessage() {
         const run = await runAgentConversation(message, files);
         const summary = summarizeAgentRun(run);
         appendAgentMessage('assistant', summary);
+        appendAgentActions(run.actions || []);
         agentConversation.push({ role: 'assistant', content: summary, run_id: run.run?.run_id || run.run_id, status: run.status || run.run?.status });
         renderAgentRunResult(run);
     } catch (error) {
@@ -1274,6 +1313,7 @@ async function generateProcess() {
             const run = await runAgentConversation(message, files);
             const summary = summarizeAgentRun(run);
             appendAgentMessage('assistant', summary);
+            appendAgentActions(run.actions || []);
             agentConversation.push({ role: 'assistant', content: summary, run_id: run.run?.run_id || run.run_id, status: run.status || run.run?.status });
             renderAgentRunResult(run);
             setGenerationProgress('Agent 运行完成', `状态：${run.status || run.run?.status || 'unknown'}`, startedAt, [], 'result');
@@ -2552,6 +2592,7 @@ Object.assign(window, {
     toggleAgentMode,
     sendAgentMessage,
     clearAgentChat,
+    startNewAgentSession,
     handleAgentAction,
     generateProcess,
     clearForm,

@@ -57,24 +57,33 @@ class ResponseModule:
                     return str(summary)
             return "已完成本轮 Agent 分析。"
         if run.status == AgentRunStatus.WAITING_HUMAN:
-            event_message = run.events[-1].message if run.events else "需要人工确认后继续。"
-            return f"{event_message}"
+            pending_call = self._pending_call(run)
+            tool_name = pending_call.get("tool_name") or run.current_step or "下一步工具"
+            if pending_call:
+                return f"我已经规划好下一步，需要你确认后执行工具：{tool_name}。确认后我会继续处理。"
+            if run.questions:
+                return "我还需要你补充信息：" + "；".join(run.questions[-3:])
+            return "当前结果需要人工确认后继续。"
         if run.status == AgentRunStatus.FAILED:
             event_message = run.events[-1].message if run.events else "Agent 运行失败。"
             return event_message
         if run.observations:
             observation = run.observations[-1]
-            return f"已执行工具 {observation.tool_name}，结果{'成功' if observation.ok else '失败'}。"
+            if observation.ok:
+                return f"我已完成工具调用：{observation.tool_name}。结果已整理在下方详情中，你可以继续追问或让我进入下一步。"
+            return f"工具 {observation.tool_name} 执行失败：{observation.error_message or '未返回可用结果'}"
         return "Agent 已接收任务，正在等待下一步。"
 
     def _next_actions(self, run: AgentRun) -> list[dict[str, Any]]:
         if run.status == AgentRunStatus.WAITING_HUMAN:
             tool_name = run.current_step or ""
+            pending_call = self._pending_call(run)
             return [
                 {
                     "type": "confirm_tool",
                     "label": "确认继续执行",
                     "tool_name": tool_name,
+                    "arguments": pending_call.get("arguments", {}),
                     "requires_human_confirmation": True,
                 },
                 {"type": "revise_request", "label": "修改需求"},
@@ -84,6 +93,13 @@ class ResponseModule:
         if run.status == AgentRunStatus.FAILED:
             return [{"type": "retry", "label": "调整后重试"}]
         return []
+
+    def _pending_call(self, run: AgentRun) -> dict[str, Any]:
+        for event in reversed(run.events):
+            pending_call = event.payload.get("pending_call") if isinstance(event.payload, dict) else None
+            if isinstance(pending_call, dict):
+                return pending_call
+        return {}
 
     def _cards(self, run: AgentRun, final_result: dict[str, Any]) -> list[dict[str, Any]]:
         cards: list[dict[str, Any]] = []

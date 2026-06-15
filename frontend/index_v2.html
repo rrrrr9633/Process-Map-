@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>曲轴工序拆分系统 v2.0</title>
-    <link rel="stylesheet" href="styles.css?v=20260615-agent-2">
+    <link rel="stylesheet" href="styles.css?v=20260615-agent-4">
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 </head>
 <body>
@@ -80,6 +80,7 @@
                             <input type="file" id="agent-file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.dwg,.dxf,.stl,.obj,.ply,.step,.stp,.iges,.igs,.txt,.json" multiple>
                             <div class="agent-chat-actions">
                                 <button class="btn btn-primary" type="button" onclick="sendAgentMessage()">发送给 Agent</button>
+                                <button class="btn btn-secondary" type="button" onclick="startNewAgentSession()">新建会话</button>
                                 <button class="btn btn-secondary" type="button" onclick="clearAgentChat()">清空对话</button>
                             </div>
                         </div>
@@ -178,6 +179,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=20260615-agent-2"></script>
+    <script src="app.js?v=20260615-agent-4"></script>
 </body>
 </html>
