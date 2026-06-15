@@ -221,7 +221,16 @@ async function loadAgentHistory() {
         }
         list.innerHTML = sessions.map(renderAgentHistoryItem).join('');
     } catch (error) {
-        list.innerHTML = `<div class="agent-history-empty">历史对话加载失败：${escapeHtml(error.message)}</div>`;
+        const fallback = agentSessionId
+            ? `<button class="btn btn-sm" type="button" onclick="openAgentHistorySession('${escapeJsString(agentSessionId)}')">恢复当前浏览器会话</button>`
+            : '';
+        list.innerHTML = `
+            <div class="agent-history-empty">
+                历史对话接口暂未生效。请确认云服务器后端已重启到最新代码。
+                <br>原始错误：${escapeHtml(error.message)}
+                ${fallback}
+            </div>
+        `;
     }
 }
 
